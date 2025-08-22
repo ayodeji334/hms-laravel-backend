@@ -927,6 +927,7 @@ class LabRequestController extends Controller
         try {
             // $type = strtoupper($request->input('type', ''));
             $searchQuery = $request->input('q', '');
+            $type = $request->input('type', '');
 
             $query = LabRequest::with([
                 'patient',
@@ -947,11 +948,11 @@ class LabRequestController extends Controller
                 'treatment.createdBy:id,firstname,lastname'
             ]);
 
-            // if ($type === 'RESULT-AVAILABLE') {
-            //     $query->whereHas('testResult');
-            // } elseif ($type === 'RESULT-NOT-AVAILABLE') {
-            //     $query->whereDoesntHave('testResult');
-            // }
+            if ($type === 'RESULT-AVAILABLE') {
+                $query->whereHas('testResult');
+            } elseif ($type === 'RESULT-NOT-AVAILABLE') {
+                $query->whereDoesntHave('testResult');
+            }
 
             if (!empty($searchQuery)) {
                 $query->whereHas('patient', function ($q) use ($searchQuery) {
@@ -961,7 +962,7 @@ class LabRequestController extends Controller
                 });
             }
 
-            $labRequests = $query->orderByDesc('updated_at')->paginate();
+            $labRequests = $query->orderByDesc('updated_at')->paginate(4);
 
             return response()->json([
                 'message' => 'Lab Request fetched successfully',

@@ -351,7 +351,7 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::post('{id}/add-results', [LabRequestController::class, 'createResult'])->middleware("role:SUPER-ADMIN,LAB-TECHNOLOGIST,RADIOLOGIST");
         Route::get('dashboard', [LabRequestController::class, 'getReport']);
         Route::patch('{id}/update-result', [LabRequestController::class, 'updateResult'])->middleware("role:SUPER-ADMIN,LAB-TECHNOLOGIST,RADIOLOGIST");
-        Route::get('/lab-tests', [LabRequestController::class, 'findAllLabRequests']);
+        // Route::get('/lab-tests', [LabRequestController::class, 'findAllLabRequests']);
         Route::get('/radiology-tests', [LabRequestController::class, 'findAllRadiologyRequests']);
         Route::get('/radiology-requests', [LabRequestController::class, 'findAllRadiologyRequests'])->middleware("role:SUPER-ADMIN,RADIOLOGIST");
         Route::get('/lab-requests', [LabRequestController::class, 'findAllLabRequests']);

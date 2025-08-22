@@ -10,6 +10,7 @@ use App\Models\Patient;
 use App\Models\Prescription;
 use App\Models\PrescriptionItem;
 use App\Models\Product;
+use App\Models\ProductSales;
 use App\Models\ProductSalesItem;
 use App\Models\Treatment;
 use App\Models\Visitation;
@@ -409,6 +410,28 @@ class PrescriptionController extends Controller
             foreach ($existingItems as $item) {
                 $item->status = PrescriptionItemStatus::DISPENSE->value;
                 $item->save();
+
+                ProductSales::where('prescription_id', $item->prescription_id)
+                    ->update(['sold_by_id' => $staff->id]);
+            }
+
+            if ($prescription->salesRecord) {
+                $saleRecord = $prescription->salesRecord;
+
+                $existingHistory = is_array($saleRecord->history)
+                    ? $saleRecord->history
+                    : json_decode($saleRecord->history ?? '[]', true);
+
+                $saleRecord->history = array_merge($existingHistory, [
+                    [
+                        'date' => now(),
+                        'action' => 'DISPENSED',
+                        'staff' => "$staff->name ($staff->staff_number)",
+                        'items' => $existingItems->pluck('id'), // or names if you have relation
+                    ]
+                ]);
+
+                $saleRecord->save();
             }
 
             $prescription->status = PrescriptionStatus::APPROVED;

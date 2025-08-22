@@ -123,7 +123,7 @@ class PaymentController extends Controller
                     'total_amount_pending' => $totals->pending ?? 0,
                 ]
             ], 200);
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             Log::error('Payment fetch error: ' . $e->getMessage());
 
             return response()->json([
@@ -165,7 +165,6 @@ class PaymentController extends Controller
 
             // Attach financials to each item
             $paginated->getCollection()->transform(function ($record) use ($balances) {
-                Log::info($balances);
                 $hmoId = $record->id;
 
                 $record->totalDue = $balances[$hmoId]['totalDue'] ?? 0;
@@ -951,6 +950,11 @@ class PaymentController extends Controller
                 'required',
                 Rule::in(['WALLET', 'TRANSFER', 'HMO', 'CASH']),
             ],
+            'amount' => [
+                'nullable',
+                'numeric',
+                'min:0'
+            ],
             'remark' => ['nullable', 'string'],
             'hmo_id' => [
                 'exclude_unless:payment_method,HMO',
@@ -1042,6 +1046,22 @@ class PaymentController extends Controller
                             $product->quantity_available_for_sales -= $item->quantity_sold;
                             $product->save();
                         }
+
+                        $existingHistory = is_array($saleRecord->history)
+                            ? $saleRecord->history
+                            : json_decode($saleRecord->history ?? '[]', true);
+
+                        $saleRecord->history = array_merge($existingHistory, [
+                            [
+                                'date' => now(),
+                                'action' => 'PAYMENT_COMPLETED',
+                                'staff' => "$staff->name ($staff->staff_number)",
+                                'reference' => $payment->transaction_reference,
+                                'amount' => $payment->amount_payable,
+                            ]
+                        ]);
+
+                        $saleRecord->save();
                     }
                 }
 
@@ -1116,9 +1136,32 @@ class PaymentController extends Controller
                 }
 
                 // HMO verification and association
+                // if ($request->payment_method == 'HMO') {
+                //     Log::info($payment->patient);
+                //     $patientHmoId = $payment->patient->organisationHmo->id;
+
+                //     if (!$patientHmoId || $request->hmo_id != $patientHmoId) {
+                //         return response()->json([
+                //             'message' => "The patient is not linked to the selected organization",
+                //             'status' => 'error',
+                //             'success' => false,
+                //         ], 400);
+                //     }
+
+                //     $insuranceProvider = OrganisationAndHmo::find($request->hmo_id);
+                //     if (!$insuranceProvider) {
+                //         return response()->json([
+                //             'message' => 'Organization Detail not found',
+                //             'status' => 'error',
+                //             'success' => false,
+                //         ], 400);
+                //     }
+
+                //     $payment->hmo_id = $insuranceProvider->id;
+                // }
                 if ($request->payment_method == 'HMO') {
-                    Log::info($payment->patient);
-                    $patientHmoId = $payment->patient->organisationHmo->id;
+                    Log::info("$payment");
+                    $patientHmoId = $payment->patient->organisationHmo?->id;
 
                     if (!$patientHmoId || $request->hmo_id != $patientHmoId) {
                         return response()->json([
@@ -1138,7 +1181,63 @@ class PaymentController extends Controller
                     }
 
                     $payment->hmo_id = $insuranceProvider->id;
+
+                    if ($request->amount !== null) {
+                        $requestedHmoAmount = (float) $request->amount;
+                        $totalAmount = (float) $payment->amount;
+
+                        Log::info("Request Amount: $requestedHmoAmount, Payment amount payable: $totalAmount");
+
+                        if ($requestedHmoAmount > $totalAmount) {
+                            return response()->json([
+                                'message' => 'Requested amount cannot exceed the total amount for the service.',
+                                'status' => 'error',
+                                'success' => false,
+                            ], 400);
+                        }
+
+                        // Update the HMO portion
+                        $payment->amount_payable = number_format($requestedHmoAmount, 2, '.', '');
+                        $payment->last_updated_by_id = $staff->id;
+
+                        // Calculate expected patient portion
+                        $expectedPatientBalance = $totalAmount - $requestedHmoAmount;
+
+                        // Get existing child payments
+                        $childPayments = Payment::where('parent_id', $payment->id)->get();
+                        $totalAlreadyAccountedFor = $childPayments->sum(function ($p) {
+                            return (float) $p->amount_payable;
+                        });
+
+                        if ($totalAlreadyAccountedFor > $expectedPatientBalance) {
+                            return response()->json([
+                                'message' => 'Patient has already paid more than the expected balance. Please review payments manually.',
+                                'status' => 'error',
+                                'success' => false,
+                            ], 400);
+                        }
+
+                        $newBalanceToBePaid = $expectedPatientBalance - $totalAlreadyAccountedFor;
+
+                        if ($newBalanceToBePaid > 0) {
+                            $newPayment = new Payment();
+                            $newPayment->amount = number_format($newBalanceToBePaid, 2, '.', '');
+                            $newPayment->amount_payable = number_format($newBalanceToBePaid, 2, '.', '');
+                            $newPayment->transaction_reference = strtoupper(Str::random(10));
+                            $newPayment->type = $payment->type;
+                            $newPayment->status = 'CREATED';
+                            $newPayment->customer_name = $payment->customer_name;
+                            $newPayment->payable_id = $payment->payable_id;
+                            $newPayment->payable_type = $payment->payable_type;
+                            $newPayment->patient_id = $payment->patient_id;
+                            $newPayment->parent_id = $payment->id;
+                            $newPayment->added_by_id = $staff->id;
+                            $newPayment->last_updated_by_id = $staff->id;
+                            $newPayment->save();
+                        }
+                    }
                 }
+
 
                 // handle transfer payment
                 if ($request->payment_method == 'TRANSFER') {
@@ -1255,20 +1354,20 @@ class PaymentController extends Controller
             $newBalanceToBePaid = $expectedPatientBalance - $totalAlreadyAccountedFor;
 
             if ($newBalanceToBePaid > 0) {
-                Payment::create([
-                    'amount' => number_format($newBalanceToBePaid, 2, '.', ''),
-                    'amount_payable' => number_format($newBalanceToBePaid, 2, '.', ''),
-                    'transaction_reference' => strtoupper(Str::random(10)),
-                    'type' => $hmoPayment->type,
-                    'status' => 'CREATED',
-                    'customer_name' => $hmoPayment->customer_name,
-                    'payable_id' => $hmoPayment->payable_id,
-                    'payable_type' => $hmoPayment->payable_type,
-                    'patient_id' => $hmoPayment->patient_id,
-                    'parent_id' => $hmoPayment->id,
-                    'added_by_id' => $staff->id,
-                    'last_updated_by_id' => $staff->id,
-                ]);
+                $payment = new Payment();
+                $payment->amount = number_format($newBalanceToBePaid, 2, '.', '');
+                $payment->amount_payable = number_format($newBalanceToBePaid, 2, '.', '');
+                $payment->transaction_reference = strtoupper(Str::random(10));
+                $payment->type = $hmoPayment->type;
+                $payment->status = 'CREATED';
+                $payment->customer_name = $hmoPayment->customer_name;
+                $payment->payable_id = $hmoPayment->payable_id;
+                $payment->payable_type = $hmoPayment->payable_type;
+                $payment->patient_id = $hmoPayment->patient_id;
+                $payment->parent_id = $hmoPayment->id;
+                $payment->added_by_id = $staff->id;
+                $payment->last_updated_by_id = $staff->id;
+                $payment->save();
             }
 
             return response()->json([

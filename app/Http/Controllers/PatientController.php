@@ -636,7 +636,7 @@ class PatientController extends Controller
                 'wallet',
                 'sponsorOf.sponsor:id,patient_reg_no,firstname,lastname',
                 'familyMembers',
-                'organisationHmo',
+                'organisationHmo:id,name,type,phone_number',
                 'vitalSigns',
                 'physicalExaminations',
                 'visitations.assignedDoctor',
@@ -753,7 +753,7 @@ class PatientController extends Controller
                 'data' => [
                     ...$patientArray,
                     'registration_payment_reference' => $registrationPayment->transaction_reference ?? null,
-                    'siblings' => count($patient->sponsorOf) > 0 ? $patient->sponsorOf : $patient->familyMembers,
+                    'siblings' => count((array)$patient->sponsorOf) > 0 ? $patient->sponsorOf : $patient->familyMembers,
                 ],
             ], 200);
         } catch (Exception $e) {

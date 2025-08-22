@@ -195,15 +195,16 @@ class LabTestResultTemplateController extends Controller
     {
         try {
             $q = $request->get('q', '');
+
             $templates = LabTestResultTemplate::with([
+                'addedBy:id,firstname,lastname',
+                'lastUpdatedBy:id,firstname,lastname',
                 'tables.rows',
                 'tables.columns',
                 'tables.rowCategories.rows',
                 'categories.tables.rows',
                 'categories.tables.columns',
-                'categories.tables.rowCategories.rows',
-                'addedBy',
-                'lastUpdatedBy',
+                'categories.tables.rowCategories.rows'
             ])->orderBy('created_at', 'desc')->when($q, function ($query, $q) {
                 $query->where('name', 'LIKE', "%{$q}%");
             })->paginate(50);

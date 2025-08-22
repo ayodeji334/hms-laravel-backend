@@ -269,11 +269,11 @@ class ProductSalesController extends Controller
     public function createPrescriptionSalesRecord($cartItems, $patientFullname, $patientId)
     {
         try {
-            $staff = Auth::user();
+            // $staff = Auth::user();
 
             $saleRecord = new ProductSales();
             $saleRecord->customer_name = $patientFullname;
-            $saleRecord->sold_by_id = $staff->id;
+            // $saleRecord->sold_by_id = $staff->id;
             $saleRecord->invoice_id = strtoupper(Str::random(10));
             $saleRecord->total_price = array_reduce($cartItems, fn($total, $item) => bcadd($total, $item->amount, 2), '0.00');
             $saleRecord->patient_id = $patientId;

@@ -272,7 +272,7 @@ class ServiceController extends Controller
                 ->whereIn('type', [ServiceTypes::LAB_TEST, ServiceTypes::RADIOLOGY_TEST])
                 ->where("is_available", true)
                 ->orderBy('created_at', 'desc')
-                ->paginate();
+                ->paginate(1);
 
             return response()->json([
                 'success' => true,

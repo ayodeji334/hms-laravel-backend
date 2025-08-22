@@ -8,6 +8,7 @@ use App\Enums\VisitationStatus;
 use App\Models\LabRequest;
 use App\Models\Patient;
 use App\Models\Payment;
+use App\Models\Prescription;
 use App\Models\Service;
 use App\Models\Treatment;
 use App\Models\User;
@@ -323,11 +324,20 @@ class VisitationController extends Controller
                 throw new BadRequestHttpException('Visitation detail not found');
             }
 
+            $previousPrescriptions = Prescription::with(['requestedBy', 'items', 'items.product'])
+                ->where('patient_id', $visitation->patient_id)
+                ->where('created_at', '<', $visitation->created_at)
+                ->orderBy('created_at', 'desc')
+                ->get();
+
+            $visitation->previousPrescriptions = $previousPrescriptions;
+
+
             return response()->json([
                 'message' => 'Visitation Fetched Successfully',
                 'status' => 'success',
                 'success' => true,
-                'data' => $visitation,
+                'data' => $visitation
             ]);
         } catch (BadRequestHttpException $e) {
             Log::error('Visitation fetch error: ' . $e->getMessage());
@@ -509,7 +519,7 @@ class VisitationController extends Controller
                 'timestamp' => now()->toDateTimeString(),
             ];
 
-            $history = json_decode($visitation->history, true) ?? [];
+            $history = json_decode((string) $visitation->history, true) ?? [];
             $history[] = $historyEntry;
             $visitation->history = json_encode($history);
             $visitation->save();
