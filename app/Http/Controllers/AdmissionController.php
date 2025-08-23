@@ -342,6 +342,7 @@ class AdmissionController extends Controller
         try {
             $admission = Admission::with([
                 'patient.wallet',
+                'patient.organisationHmo:id,name,type,phone_number',
                 'investigations:id,content,title,noteable_type,noteable_id,created_by_id',
                 'nurseReports.createdBy',
                 'doctorReports.createdBy',

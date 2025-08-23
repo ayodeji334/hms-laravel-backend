@@ -302,6 +302,7 @@ class VisitationController extends Controller
                 'lastUpdatedBy:id,firstname,lastname',
                 'patient.physicalExaminations.addedBy.assignedBranch',
                 'patient.labRequests',
+                'patient.organisationHmo:id,name,type,phone_number',
                 // 'patient.labRequests.testResult.addedBy.branch',
                 'patient.vitalSigns',
                 'patient.treatments.createdBy.assignedBranch',
