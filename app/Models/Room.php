@@ -32,7 +32,7 @@ class Room extends Model
 
     public function category()
     {
-        return $this->belongsTo(RoomCategory::class);
+        return $this->belongsTo(RoomCategory::class, "room_category_id");
     }
 
     public function createdBy()

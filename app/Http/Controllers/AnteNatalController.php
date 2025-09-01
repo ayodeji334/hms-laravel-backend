@@ -370,6 +370,7 @@ class AnteNatalController extends Controller
                 'scanReports.createdBy',
                 'scanReports.lastUpdatedBy',
                 'patient',
+                "patient.organisationHmo",
                 'routineCheckup.examiner.assignedBranch',
                 'routineCheckup.addedBy.assignedBranch',
                 'prescriptions.items.product',

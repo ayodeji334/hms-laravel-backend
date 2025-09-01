@@ -75,6 +75,7 @@ Route::middleware("auth:sanctum")->group(function () {
     Route::prefix('products')->group(function () {
         // Route::post('/products/upload', [ProductController::class, 'upload']);
         Route::get('/search', [ProductController::class, 'searchProductByName']);
+        Route::get('/search-products', [ProductController::class, 'searchProductByName']);
         Route::get('/', [ProductController::class, 'findAll']);
         Route::get('/inventory', [ProductController::class, 'getInventoryRecords'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
         Route::get('/out-of-stock', [ProductController::class, 'getOutOfStockProducts'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');

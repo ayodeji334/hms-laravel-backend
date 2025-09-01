@@ -18,6 +18,8 @@ class Patient extends Model
         ];
     }
 
+    protected $hidden = ["password"];
+
     protected $fillable = [
         'email',
         'password',

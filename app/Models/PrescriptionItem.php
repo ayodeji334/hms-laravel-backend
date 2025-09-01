@@ -15,16 +15,30 @@ class PrescriptionItem extends Model
         'product_id',
         'quantity',
         'dosage',
-        'instruction'
+        'instruction',
+        'dispensed_by_id',
+        'history'
     ];
+
+    protected function casts()
+    {
+        return [
+            "history" => "array"
+        ];
+    }
 
     public function prescription()
     {
-        return $this->belongsTo(Prescription::class);
+        return $this->belongsTo(Prescription::class, 'prescription_id');
+    }
+
+    public function dispensedBy()
+    {
+        return $this->belongsTo(User::class, 'dispensed_by_id');
     }
 
     public function product()
     {
-        return $this->belongsTo(Product::class);
+        return $this->belongsTo(Product::class, 'product_id');
     }
 }

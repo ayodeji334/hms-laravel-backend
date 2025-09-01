@@ -314,44 +314,44 @@ class ProductController extends Controller
     //     }
     // }
 
-    // public function searchProductByName(Request $request)
-    // {
-    //     try {
-    //         $queryBuilder = Product::query();
-
-    //         // Paginate results
-    //         $query = $request->get('q', '');
-
-    //         // Apply search filter if provided
-    //         if (!empty($query)) {
-    //             $queryBuilder->where(function ($qb) use ($query) {
-    //                 $qb->where('brand_name', 'like', "%$query%")
-    //                     ->orWhere('generic_name', 'like', "%$query%");
-    //             });
-    //         }
-
-    //         // Paginate results
-    //         $products = $queryBuilder->get();
-
-    //         return response()->json([
-    //             'success' => true,
-    //             'status' => 'success',
-    //             'message' => 'Products records retrieved successfully',
-    //             'data' => $products
-    //         ], 200);
-    //     } catch (Exception $e) {
-    //         Log::info($e->getMessage());
-    //         // Return the error message for debugging
-    //         return response()->json([
-    //             'success' => false,
-    //             'status' => 'error',
-    //             'message' => 'An error occurred while retrieving patient records',
-    //             'trace' => $e->getTraceAsString()
-    //         ], 500);
-    //     }
-    // }
-
     public function searchProductByName(Request $request)
+    {
+        try {
+            $queryBuilder = Product::query();
+
+            // Paginate results
+            $query = $request->get('q', '');
+
+            // Apply search filter if provided
+            if (!empty($query)) {
+                $queryBuilder->where(function ($qb) use ($query) {
+                    $qb->where('brand_name', 'like', "%$query%")
+                        ->orWhere('generic_name', 'like', "%$query%");
+                });
+            }
+
+            // Paginate results
+            $products = $queryBuilder->get();
+
+            return response()->json([
+                'success' => true,
+                'status' => 'success',
+                'message' => 'Products records retrieved successfully',
+                'data' => $products
+            ], 200);
+        } catch (Exception $e) {
+            Log::info($e->getMessage());
+            // Return the error message for debugging
+            return response()->json([
+                'success' => false,
+                'status' => 'error',
+                'message' => 'An error occurred while retrieving patient records',
+                'trace' => $e->getTraceAsString()
+            ], 500);
+        }
+    }
+
+    public function searchProduct(Request $request)
     {
         try {
             $queryBuilder = Product::query();

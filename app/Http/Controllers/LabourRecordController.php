@@ -209,7 +209,7 @@ class LabourRecordController extends Controller
                 'summary.supervisor',
                 'summary.lastUpdatedBy',
                 'progressions.addedBy',
-                // 'patient.profilePicture',
+                'patient.organisationHmo',
                 'patient.anteNatalRecords',
                 'addedBy',
                 'examiner',
@@ -399,7 +399,6 @@ class LabourRecordController extends Controller
             ], 500);
         }
     }
-
     public function deleteProgression($id)
     {
         try {

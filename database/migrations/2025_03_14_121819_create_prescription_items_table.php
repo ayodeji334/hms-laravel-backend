@@ -15,12 +15,14 @@ return new class extends Migration
             $table->id();
             $table->string('dosage')->nullable();
             $table->enum('dosage_unit', ['mg', 'ml', 'tablet', 'capsule'])->nullable();
-            $table->enum('status', ['CREATED', 'APPROVED', 'DECLINED'])->default('CREATED');
+            $table->enum('status', ['CREATED', 'DISPENSED', 'DECLINED'])->default('CREATED');
             $table->string('frequency')->nullable();
             $table->string('duration')->nullable();
             $table->longText('instructions')->nullable();
-            $table->foreignId('product_id')->constrained('products')->onDelete('cascade');
-            $table->foreignId('prescription_id')->constrained('prescriptions')->onDelete('cascade');
+            $table->unsignedBigInteger('product_id')->constrained('products')->onDelete('cascade');
+            $table->unsignedBigInteger('prescription_id')->constrained('prescriptions')->onDelete('cascade');
+            $table->unsignedBigInteger('dispensed_by_id')->constrained('users')->onDelete('cascade');
+            $table->json('history')->nullable();
             $table->timestamps();
             $table->softDeletes();
         });

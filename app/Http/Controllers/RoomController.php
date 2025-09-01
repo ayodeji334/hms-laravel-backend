@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Branch;
 use App\Models\Room;
 use App\Models\RoomCategory;
 use Exception;
@@ -95,7 +94,7 @@ class RoomController extends Controller
     public function findAllPagination(Request $request)
     {
         try {
-            $limit = $request->input('limit', 15);
+            $limit = $request->input('limit', 20);
 
             $query = Room::with(['createdBy:id,firstname,lastname', 'category:id,name', 'lastUpdatedBy:id,firstname,lastname', 'beds', 'branch', 'category'])
                 ->when($request->status && strtoupper($request->status) !== 'ALL', function ($query) use ($request) {

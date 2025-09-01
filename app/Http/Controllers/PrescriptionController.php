@@ -370,13 +370,13 @@ class PrescriptionController extends Controller
                 ], 400);
             }
 
-            // if ($staff->role !== 'PHARMACIST') {
-            //     return response()->json([
-            //         'message' => 'Only a pharmacist can mark prescription items as dispensed.',
-            //         'status' => 'error',
-            //         'success' => false,
-            //     ], 400);
-            // }
+            if ($staff->role != 'PHARMACIST' && $staff->role != "SUPER-ADMIN") {
+                return response()->json([
+                    'message' => 'Only a user with pharmacist or CMD role can mark prescription items as dispensed.',
+                    'status' => 'error',
+                    'success' => false,
+                ], 400);
+            }
 
             if (!$prescription->salesRecord->payment->id) {
                 return response()->json([
@@ -405,15 +405,37 @@ class PrescriptionController extends Controller
                 ], 400);
             }
 
-            Log::info($existingItems);
+            // foreach ($existingItems as $item) {
+            //     $item->status = PrescriptionItemStatus::DISPENSE->value;
+            //     $item->save();
+
+            //     ProductSales::where('prescription_id', $item->prescription_id)
+            //         ->update(['sold_by_id' => $staff->id]);
+            // }
 
             foreach ($existingItems as $item) {
                 $item->status = PrescriptionItemStatus::DISPENSE->value;
+                $item->dispensed_by_id = $staff->id;
+
+                $existingHistory = is_array($item->history)
+                    ? $item->history
+                    : json_decode($item->history ?? '[]', true);
+
+                $existingHistory[] = [
+                    'date' => now()->toDateTimeString(),
+                    'action' => 'DISPENSED',
+                    'staff_id' => $staff->id,
+                    'staff_name' => $staff->name,
+                    'staff_number' => $staff->staff_number,
+                ];
+
+                $item->history = $existingHistory;
                 $item->save();
 
                 ProductSales::where('prescription_id', $item->prescription_id)
                     ->update(['sold_by_id' => $staff->id]);
             }
+
 
             if ($prescription->salesRecord) {
                 $saleRecord = $prescription->salesRecord;
@@ -475,13 +497,13 @@ class PrescriptionController extends Controller
                 ], 400);
             }
 
-            // if ($staff->role === 'PHARMACIST') {
-            //     return response()->json([
-            //         'message' => 'You are not allowed to mark the prescription item as unavailable. Only a pharmacist can do that.',
-            //         'status' => 'error',
-            //         'success' => false,
-            //     ], 400);
-            // }
+            if ($staff->role != 'PHARMACIST' && $staff->role != "SUPER-ADMIN") {
+                return response()->json([
+                    'message' => 'You are not allowed to mark the prescription item as unavailable. Only a user with pharmacist or CMD role can do that.',
+                    'status' => 'error',
+                    'success' => false,
+                ], 400);
+            }
 
             $existingItems = PrescriptionItem::whereIn('id', $validated['prescription_items'])->get();
 
@@ -496,8 +518,21 @@ class PrescriptionController extends Controller
             // DB::beginTransaction();
 
             foreach ($existingItems as $item) {
-                // Mark each item as "Not Available"
                 $item->status = PrescriptionItemStatus::NOT_AVAILABLE->value;
+
+                $existingHistory = is_array($item->history)
+                    ? $item->history
+                    : json_decode($item->history ?? '[]', true);
+
+                $existingHistory[] = [
+                    'date' => now()->toDateTimeString(),
+                    'action' => 'NOT_AVAILABLE',
+                    'staff_id' => $staff->id,
+                    'staff_name' => $staff->name,
+                    'staff_number' => $staff->staff_number,
+                ];
+
+                $item->history = $existingHistory;
                 $item->save();
             }
 
@@ -523,7 +558,6 @@ class PrescriptionController extends Controller
 
     public function updatePrescriptionItem(Request $request, $id)
     {
-        Log::info($id);
         $updatePrescriptionItemDto = $request->validate([
             'dosage' => 'required|numeric|min:0',
             'product_id' => 'required|exists:products,id',
@@ -692,6 +726,7 @@ class PrescriptionController extends Controller
     //         return response()->json(['message' => 'Something went wrong. Try again'], 500);
     //     }
     // }
+
 
     public function removeItems(Request $request, $id)
     {
@@ -1069,8 +1104,10 @@ class PrescriptionController extends Controller
             // $query = Prescription::with(['patient', 'requestedBy', 'items', 'notes', 'salesRecord.payment']);
             $query = Prescription::with([
                 'patient',
-                'requestedBy',
+                // 'requestedBy',
                 'items',
+                'items.dispensedBy:id,firstname,lastname,staff_number',
+                'notes',
                 'notes',
                 'salesRecord.payment' => function ($query) {
                     $query->select('id', 'status', 'payable_id', 'payable_type');
@@ -1160,7 +1197,7 @@ class PrescriptionController extends Controller
     public function findOne($id)
     {
         try {
-            $prescription = Prescription::with(['requestedBy.assignedBranch', 'notes.createdBy', 'items.product', 'treatment', 'patient', 'salesRecord.payment'])->find($id);
+            $prescription = Prescription::with(['requestedBy.assignedBranch', 'items.dispensedBy:id,firstname,lastname,staff_number', 'notes.createdBy', 'items.product', 'treatment', 'patient', 'salesRecord.payment'])->find($id);
 
             if (!$prescription) {
                 return response()->json([
