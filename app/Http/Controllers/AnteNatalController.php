@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Enums\PaymentStatus;
-use App\Enums\ServiceTypes;
 use App\Models\AnteNatal;
 use App\Models\AnteNatalRoutineAssessment;
 use App\Models\Note;
@@ -78,13 +77,10 @@ class AnteNatalController extends Controller
                 ], 400);
             }
 
-            DB::beginTransaction();
-
-            // Load payment model (not just array from service)
+            // Load payment before transaction
             $payment = Payment::where('reference', $createAnteNatalDto['payment_reference'])->first();
 
             if (!$payment) {
-                DB::rollBack();
                 return response()->json([
                     'message' => 'Payment reference not found',
                     'success' => false,
@@ -92,9 +88,7 @@ class AnteNatalController extends Controller
                 ], 400);
             }
 
-            // Ensure payment belongs to staff
-            if ($payment->patient_id !== $request['patient_id']) {
-                DB::rollBack();
+            if ($payment->patient_id != $createAnteNatalDto['patient_id']) {
                 return response()->json([
                     'message' => 'This payment does not belong to the selected patient',
                     'success' => false,
@@ -102,9 +96,7 @@ class AnteNatalController extends Controller
                 ], 400);
             }
 
-            // Check if payment already used
             if ($payment->is_used) {
-                DB::rollBack();
                 return response()->json([
                     'message' => 'This payment has already been used',
                     'success' => false,
@@ -112,12 +104,10 @@ class AnteNatalController extends Controller
                 ], 400);
             }
 
-            // Confirm it is for ante-natal and completed
             if (
                 empty($payment->payable_type) ||
                 $payment->payable_type !== AnteNatal::class
             ) {
-                DB::rollBack();
                 return response()->json([
                     'message' => 'The payment is not for the ante-natal registration',
                     'success' => false,
@@ -126,7 +116,6 @@ class AnteNatalController extends Controller
             }
 
             if ($payment->status !== PaymentStatus::COMPLETED->value) {
-                DB::rollBack();
                 return response()->json([
                     'message' => 'The payment is not yet confirmed',
                     'success' => false,
@@ -134,35 +123,34 @@ class AnteNatalController extends Controller
                 ], 400);
             }
 
-            // Generate care ID
-            $lastRecord = AnteNatal::orderByDesc('created_at')->select('care_id')->first();
-            $lastCareId = $lastRecord?->care_id ?? '000000';
+            return DB::transaction(function () use ($createAnteNatalDto, $patient, $staff, $payment) {
+                // Generate care ID
+                $lastRecord = AnteNatal::orderByDesc('created_at')->select('care_id')->first();
+                $lastCareId = $lastRecord?->care_id ?? '000000';
 
-            // Create AnteNatal record
-            $newRecord = new AnteNatal();
-            $newRecord->booking_date = Carbon::parse($createAnteNatalDto['date_of_booking']);
-            $newRecord->age_at_marriage = $createAnteNatalDto['age_at_marriage'];
-            $newRecord->duration_of_pregnancy_at_registration = $createAnteNatalDto['duration_of_pregnancy_at_registration'];
-            $newRecord->patient_id = $patient->id;
-            $newRecord->added_by_id = $staff->id;
-            $newRecord->last_updated_by_id = $staff->id;
-            $newRecord->care_id = $this->generateNextId($lastCareId);
-            $newRecord->save();
+                // Create AnteNatal record
+                $newRecord = new AnteNatal();
+                $newRecord->booking_date = Carbon::parse($createAnteNatalDto['date_of_booking']);
+                $newRecord->age_at_marriage = $createAnteNatalDto['age_at_marriage'];
+                $newRecord->duration_of_pregnancy_at_registration = $createAnteNatalDto['duration_of_pregnancy_at_registration'];
+                $newRecord->patient_id = $patient->id;
+                $newRecord->added_by_id = $staff->id;
+                $newRecord->last_updated_by_id = $staff->id;
+                $newRecord->care_id = $this->generateNextId($lastCareId);
+                $newRecord->save();
 
-            // Attach payment to antenatal
-            $payment->payable_id = $newRecord->id;
-            $payment->is_used = true;
-            $payment->save();
+                // Attach payment to antenatal
+                $payment->payable_id = $newRecord->id;
+                $payment->is_used = true;
+                $payment->save();
 
-            DB::commit();
-
-            return response()->json([
-                'message' => 'Ante-natal account created successfully',
-                'success' => true,
-                'status' => 'success',
-            ]);
+                return response()->json([
+                    'message' => 'Ante-natal account created successfully',
+                    'success' => true,
+                    'status' => 'success',
+                ]);
+            });
         } catch (Exception $e) {
-            DB::rollBack();
             Log::error('Ante-natal account creation failed: ' . $e->getMessage());
 
             return response()->json([
