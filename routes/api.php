@@ -311,6 +311,7 @@ Route::middleware("auth:sanctum")->group(function () {
     Route::prefix('services')->group(function () {
         Route::get('/search', [ServiceController::class, 'searchProductByName']);
         Route::get('/available-tests', [ServiceController::class, 'getAllTests']);
+        Route::get('/available-tests/search', [ServiceController::class, 'searchTests']);
         Route::get('/lab-tests', [ServiceController::class, 'getAllLabTests']);
         Route::get('/radiology-tests', [ServiceController::class, 'getAllRadiologyTests']);
         Route::get('/', [ServiceController::class, 'findAll']);
