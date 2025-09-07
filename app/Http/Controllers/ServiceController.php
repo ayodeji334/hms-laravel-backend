@@ -293,6 +293,37 @@ class ServiceController extends Controller
         }
     }
 
+    public function searchTests(Request $request)
+    {
+        try {
+            $search = $request->q;
+
+            Log::info($search);
+
+            $query = Service::whereIn('type', [ServiceTypes::LAB_TEST, ServiceTypes::RADIOLOGY_TEST])
+                ->where("is_available", true);
+
+            $services =  $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%");
+            })->get();
+
+            return response()->json([
+                'success'   => true,
+                'status'    => 'success',
+                'message'   => 'Available Tests Services retrieved successfully',
+                'data'      => $services
+            ], 200);
+        } catch (Exception $e) {
+            Log::error($e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'status' => 'error',
+                'message' => 'An error occurred while retrieving services',
+            ], 500);
+        }
+    }
+
     public function getAllLabTests()
     {
         try {
