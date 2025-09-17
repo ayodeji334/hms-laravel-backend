@@ -716,17 +716,17 @@ class PatientController extends Controller
                 'wallet',
                 'sponsorOf.sponsor:id,patient_reg_no,firstname,lastname',
                 'familyMembers.patient:id,patient_reg_no,firstname,lastname',
-                'organisationHmo',
-                'vitalSigns',
-                'physicalExaminations',
-                'visitations.assignedDoctor',
-                'prescriptions.requestedBy',
-                'prescriptions.items.product',
-                'treatments.createdBy',
-                'labRequests.addedBy',
-                'labRequests.testResult.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
-                'labRequests.testResult.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number',
-                'surgicalOperations.surgeon',
+                // 'organisationHmo',
+                // 'vitalSigns',
+                // 'physicalExaminations',
+                // 'visitations.assignedDoctor',
+                // 'prescriptions.requestedBy',
+                // 'prescriptions.items.product',
+                // 'treatments.createdBy',
+                // 'labRequests.addedBy',
+                // 'labRequests.testResult.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
+                // 'labRequests.testResult.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number',
+                // 'surgicalOperations.surgeon',
             ])->find($id);
 
             if (!$patient) {
@@ -767,6 +767,174 @@ class PatientController extends Controller
         }
     }
 
+    public function visitations($id, Request $request)
+    {
+        try {
+            $perPage = $request->get('per_page', 10);
+
+            $visitations = Patient::findOrFail($id)
+                ->visitations()
+                ->with('assignedDoctor')
+                ->paginate($perPage);
+
+            return response()->json([
+                'message' => 'Patient visitations fetched successfully.',
+                'status' => 'success',
+                'success' => true,
+                'data' => $visitations,
+            ]);
+        } catch (Exception $e) {
+            Log::error('Fetch patient visitations error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'An error occurred while trying to fetch the patient visitations.',
+                'status' => 'error',
+                'success' => false
+            ], 500);
+        }
+    }
+
+    public function latestMedicalRecords($patientId)
+    {
+        try {
+            $patient = Patient::findOrFail($patientId);
+
+            $lastVitalSign = $patient->vitalSigns()
+                ->latest('created_at')
+                ->first();
+
+            $lastGeneralExamination = $patient->physicalExaminations()
+                ->latest('created_at')
+                ->first();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Latest records fetched successfully',
+                'data' => [
+                    'last_vital_sign' => $lastVitalSign,
+                    'last_general_examination' => $lastGeneralExamination,
+                ]
+            ]);
+        } catch (Exception $e) {
+            Log::error('Fetch patient latestMedicalRecords error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'An error occurred while trying to fetch the patient latest medical records.',
+                'status' => 'error',
+                'success' => false
+            ], 500);
+        }
+    }
+
+    public function prescriptions($id, Request $request)
+    {
+        try {
+            $perPage = $request->get('per_page', 10);
+
+            $prescriptions = Patient::findOrFail($id)
+                ->prescriptions()
+                ->with(['requestedBy', 'items.product'])
+                ->paginate($perPage);
+
+            return response()->json([
+                'message' => 'Patient prescriptions fetched successfully.',
+                'status' => 'success',
+                'success' => true,
+                'data' => $prescriptions,
+            ]);
+        } catch (Exception $e) {
+            Log::error('Fetch patient prescriptions error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'An error occurred while trying to fetch the patient prescriptions.',
+                'status' => 'error',
+                'success' => false
+            ], 500);
+        }
+    }
+
+    public function treatments($id, Request $request)
+    {
+        try {
+            $perPage = $request->get('per_page', 10);
+
+            $treatments = Patient::findOrFail($id)
+                ->treatments()
+                ->with('createdBy')
+                ->paginate($perPage);
+
+            return response()->json([
+                'message' => 'Patient treatments fetched successfully.',
+                'status' => 'success',
+                'success' => true,
+                'data' => $treatments,
+            ]);
+        } catch (Exception $e) {
+            Log::error('Fetch patient treatments error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'An error occurred while trying to fetch the patient treatments.',
+                'status' => 'error',
+                'success' => false
+            ], 500);
+        }
+    }
+
+    public function labRequests($id, Request $request)
+    {
+        try {
+            $perPage = $request->get('per_page', 10);
+
+            $labRequests = Patient::findOrFail($id)
+                ->labRequests()
+                ->with([
+                    'addedBy',
+                    'testResult.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
+                    'testResult.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number'
+                ])
+                ->paginate($perPage);
+
+            return response()->json([
+                'message' => 'Patient lab requests fetched successfully.',
+                'status' => 'success',
+                'success' => true,
+                'data' => $labRequests,
+            ]);
+        } catch (Exception $e) {
+            Log::error('Fetch patient test requests error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'An error occurred while trying to fetch the patient test requests.',
+                'status' => 'error',
+                'success' => false
+            ], 500);
+        }
+    }
+
+    public function payments($id, Request $request)
+    {
+        try {
+            $perPage = $request->get('per_page', 10);
+
+            $payments = Payment::where('patient_id', $id)
+                ->paginate($perPage);
+
+            return response()->json([
+                'message' => 'Patient payments fetched successfully.',
+                'status' => 'success',
+                'success' => true,
+                'data' => $payments,
+            ]);
+        } catch (Exception $e) {
+            Log::error('Fetch patient payments error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'An error occurred while trying to fetch the patient payments.',
+                'status' => 'error',
+                'success' => false
+            ], 500);
+        }
+    }
 
     // public function findOne($id)
     // {

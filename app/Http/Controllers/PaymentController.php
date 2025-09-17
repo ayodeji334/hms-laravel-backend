@@ -969,7 +969,13 @@ class PaymentController extends Controller
                 'exclude_unless:payment_method,TRANSFER',
                 'string',
             ],
+            'transfer_charges' => [
+                'exclude_unless:payment_method,TRANSFER',
+                'numeric',
+                'min:0'
+            ],
         ]);
+
 
         try {
             $staff = Auth::user();
@@ -1240,9 +1246,15 @@ class PaymentController extends Controller
 
 
                 // handle transfer payment
+                // if ($request->payment_method == 'TRANSFER') {
+                //     $payment->transaction_reference = $request->transfer_reference;
+                //     $payment->bank_transfer_to = $request->bank_transfer_to;
+                // }
+                // handle transfer payment
                 if ($request->payment_method == 'TRANSFER') {
                     $payment->transaction_reference = $request->transfer_reference;
                     $payment->bank_transfer_to = $request->bank_transfer_to;
+                    $payment->transfer_charges = $request->transfer_charges ?? 0;
                 }
 
                 $existingHistory = is_array($payment->history)
@@ -1251,7 +1263,12 @@ class PaymentController extends Controller
 
                 $payment->history = array_merge($existingHistory, [
                     ['date' => now(), 'title' => PaymentStatus::COMPLETED],
-                    ['date' => now(), 'title' => 'CONFIRMED', 'confirmed_by' => "$staff->name ($staff->staff_number)"],
+                    [
+                        'date' => now(),
+                        'title' => 'CONFIRMED',
+                        'confirmed_by' => "$staff->name ($staff->staff_number)",
+                        'transfer_charges' => $request->payment_method == 'TRANSFER' ? (float) $request->transfer_charges : null,
+                    ],
                 ]);
 
                 $payment->status = PaymentStatus::COMPLETED;
@@ -1270,6 +1287,71 @@ class PaymentController extends Controller
         } catch (Exception $th) {
             Log::info($th->getMessage());
 
+            return response()->json([
+                'message' => 'Something went wrong. Try again in 5 minutes',
+                'status' => 'error',
+                'success' => false,
+            ], 500);
+        }
+    }
+
+    public function markAsUnPaid($id)
+    {
+        try {
+            $staff = Auth::user();
+            $payment = Payment::with(['patient.wallet', 'lastUpdatedBy'])->find($id);
+            if (!$payment) {
+                return response()->json([
+                    'message' => 'The payment detail not found',
+                    'status' => 'error',
+                    'success' => false,
+                ], 400);
+            }
+
+            if ($payment->status != PaymentStatus::COMPLETED->value) {
+                return response()->json([
+                    'message' => 'The payment is not yet confirmed',
+                    'status' => 'error',
+                    'success' => false,
+                ], 400);
+            }
+
+            $saleRecord = ProductSales::with(['payment', 'salesItems.product'])
+                ->whereHas('payment', fn($q) => $q->where('id', $id))
+                ->first();
+
+            if ($saleRecord) {
+                foreach ($saleRecord->salesItems as $item) {
+                    if ($item->product) {
+                        $item->product->quantity_sold -= $item->quantity_sold;
+                        $item->product->quantity_available_for_sales += $item->quantity_sold;
+                        $item->product->save();
+                    }
+                }
+            }
+
+            $payment->status = PaymentStatus::PENDING;
+            $existingHistory = is_array($payment->history) ? $payment->history : json_decode($payment->history ?? '[]', true);
+            $payment->history = array_merge($existingHistory, [
+                ['date' => now(), 'title' => PaymentStatus::PENDING->value],
+                ['date' => now(), 'title' => 'UNCONFIRMED', "unconfirmed_by" => "$staff->name ($staff->staff_number)"],
+            ]);
+            $payment->last_updated_by_id = $staff->id;
+            $payment->confirmed_by_id = null;
+            $payment->save();
+
+            if ($payment->payment_method == 'WALLET') {
+                $payment->patient->wallet->deposit_balance = ((float) $payment->patient->wallet->deposit_balance + (float) $payment->amount);
+                $payment->patient->wallet->save();
+            }
+
+            return response()->json([
+                'message' => 'Payment marked as unpaid successfully',
+                'status' => 'success',
+                'success' => true,
+            ]);
+        } catch (Exception $e) {
+            Log::info($e->getMessage());
             return response()->json([
                 'message' => 'Something went wrong. Try again in 5 minutes',
                 'status' => 'error',
@@ -1378,71 +1460,6 @@ class PaymentController extends Controller
         } catch (\Throwable $th) {
             Log::error('Payment update failed: ' . $th->getMessage());
 
-            return response()->json([
-                'message' => 'Something went wrong. Try again in 5 minutes',
-                'status' => 'error',
-                'success' => false,
-            ], 500);
-        }
-    }
-
-    public function markAsUnPaid($id)
-    {
-        try {
-            $staff = Auth::user();
-            $payment = Payment::with(['patient.wallet', 'lastUpdatedBy'])->find($id);
-            if (!$payment) {
-                return response()->json([
-                    'message' => 'The payment detail not found',
-                    'status' => 'error',
-                    'success' => false,
-                ], 400);
-            }
-
-            if ($payment->status != PaymentStatus::COMPLETED->value) {
-                return response()->json([
-                    'message' => 'The payment is not yet confirmed',
-                    'status' => 'error',
-                    'success' => false,
-                ], 400);
-            }
-
-            $saleRecord = ProductSales::with(['payment', 'salesItems.product'])
-                ->whereHas('payment', fn($q) => $q->where('id', $id))
-                ->first();
-
-            if ($saleRecord) {
-                foreach ($saleRecord->salesItems as $item) {
-                    if ($item->product) {
-                        $item->product->quantity_sold -= $item->quantity_sold;
-                        $item->product->quantity_available_for_sales += $item->quantity_sold;
-                        $item->product->save();
-                    }
-                }
-            }
-
-            $payment->status = PaymentStatus::PENDING;
-            $existingHistory = is_array($payment->history) ? $payment->history : json_decode($payment->history ?? '[]', true);
-            $payment->history = array_merge($existingHistory, [
-                ['date' => now(), 'title' => PaymentStatus::PENDING->value],
-                ['date' => now(), 'title' => 'UNCONFIRMED', "unconfirmed_by" => "$staff->name ($staff->staff_number)"],
-            ]);
-            $payment->last_updated_by_id = $staff->id;
-            $payment->confirmed_by_id = null;
-            $payment->save();
-
-            if ($payment->payment_method == 'WALLET') {
-                $payment->patient->wallet->deposit_balance = ((float) $payment->patient->wallet->deposit_balance + (float) $payment->amount);
-                $payment->patient->wallet->save();
-            }
-
-            return response()->json([
-                'message' => 'Payment marked as unpaid successfully',
-                'status' => 'success',
-                'success' => true,
-            ]);
-        } catch (Exception $e) {
-            Log::info($e->getMessage());
             return response()->json([
                 'message' => 'Something went wrong. Try again in 5 minutes',
                 'status' => 'error',

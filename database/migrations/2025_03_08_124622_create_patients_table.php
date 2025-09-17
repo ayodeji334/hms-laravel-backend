@@ -46,6 +46,7 @@ return new class extends Migration
             $table->string('tribe')->nullable();
             $table->string('marital_status')->default('SINGLE');
             $table->string('nationality')->nullable();
+            $table->string('department')->nullable();
             $table->string('level')->nullable();
             $table->string('password')->nullable();
             $table->timestamp('last_updated_on')->nullable();

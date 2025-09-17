@@ -55,6 +55,12 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::post('/', [PatientController::class, 'create'])->middleware('role:SUPER-ADMIN,ADMIN,RECORD-KEEPER');
         Route::post('/upload', [PatientController::class, 'uploadPatients'])->middleware('role:SUPER-ADMIN,ADMIN,RECORD-KEEPER');
         Route::patch('{id}', [PatientController::class, 'update'])->middleware('role:SUPER-ADMIN,ADMIN,RECORD-KEEPER');
+        Route::get('patient/{id}/visitations', [PatientController::class, 'visitations']);
+        Route::get('patient/{id}/prescriptions', [PatientController::class, 'prescriptions']);
+        Route::get('patient/{id}/treatments', [PatientController::class, 'treatments']);
+        Route::get('patient/{id}/lab-requests', [PatientController::class, 'labRequests']);
+        Route::get('patient/{id}/payments', [PatientController::class, 'payments']);
+        Route::get('/patient/{patient}/latest-records', [PatientController::class, 'latestMedicalRecords']);
         // Route::delete('{id}', [PatientController::class, 'delete']);
     });
 

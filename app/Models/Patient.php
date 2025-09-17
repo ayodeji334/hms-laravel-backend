@@ -35,6 +35,7 @@ class Patient extends Model
         'next_of_kin_lastname',
         'next_of_kin_address',
         'next_of_kin_phone_number',
+        'next_of_kin_relationship',
         'state_of_origin',
         'marital_status',
         'place_of_birth',

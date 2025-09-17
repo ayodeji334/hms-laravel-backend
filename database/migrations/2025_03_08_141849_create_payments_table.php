@@ -16,6 +16,7 @@ return new class extends Migration
             $table->string('amount_payable')->nullable();
             $table->string('refund_amount')->nullable();
             $table->string('amount')->nullable();
+            $table->string('transfer_charges')->nullable();
             $table->string('transaction_reference')->unique();
             $table->string('reference')->nullable()->unique();
             $table->string('bank_transfer_to')->nullable();
