@@ -302,8 +302,10 @@ class VisitationController extends Controller
                 'lastUpdatedBy:id,firstname,lastname',
                 'patient.physicalExaminations.addedBy.assignedBranch',
                 'patient.labRequests',
+                'patient.wallet',
                 'patient.organisationHmo:id,name,type,phone_number',
-                // 'patient.labRequests.testResult.addedBy.branch',
+                'patient.labRequests.testResult',
+                'patient.labRequests.service',
                 'patient.vitalSigns',
                 'patient.treatments.createdBy.assignedBranch',
                 'assignedDoctor.assignedBranch',
@@ -317,7 +319,7 @@ class VisitationController extends Controller
                 'prescriptions.items',
                 'prescriptions.items.product',
                 'prescriptions.notes' => function ($query) {
-                    $query->limit(1); // Limit notes join to only the first note
+                    $query->limit(1);
                 }
             ])->where('id', $id)->first();
 

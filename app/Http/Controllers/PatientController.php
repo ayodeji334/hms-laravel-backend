@@ -136,16 +136,14 @@ class PatientController extends Controller
             $newPatient->staff_number = $request['staff_number'] ?? null;
             $newPatient->state_of_origin = trim($request['state_of_origin']);
             $newPatient->lga = trim($request['lga']);
-            $newPatient->organisationHmo()->associate($insuranceProvider);
+            // $newPatient->organisationHmo()->associate($insuranceProvider);
             $newPatient->type = $request['type'];
             $newPatient->title = $request['title'];
             $newPatient->tribe = $request['tribe'];
             $newPatient->hall_of_residence = $request['hall_of_residence'] ?? null;
             $newPatient->room_number = $request['room_number'] ?? null;
             $newPatient->insurance_number = $request['insurance_number'] ?? null;
-            $newPatient->insurance_provider_id = ($insuranceProvider !== null)
-                ? $insuranceProvider->id
-                : null;
+            $newPatient->organisation_hmo_id = $request['insurance_provider'] ?? null;
             $newPatient->age = trim($request['age']);
             $newPatient->matriculation_number = $request['matriculation_number'];
             $newPatient->level = $request['level'];

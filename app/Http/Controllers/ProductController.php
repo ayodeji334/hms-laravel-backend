@@ -171,155 +171,12 @@ class ProductController extends Controller
         }
     }
 
-    // public function create(Request $request)
-    // {
-    //     $request->validate([
-    //         'brand_name' => ['required', 'string'],
-    //         'generic_name' => ['required', 'string'],
-    //         'description' => ['required', 'string'],
-    //         'manufacturer' => ['required', 'numeric', 'exists:product_manufacturers,id'],
-    //         'type' => ['required', 'numeric', 'exists:product_types,id'],
-    //         'storage_condition' => ['required', 'string', 'max:255'],
-    //         'dosage_type' => ['required', Rule::in(['TABLET', 'CAPSULE', 'DROP', 'LIQUID', 'OINTMENT', 'CREAM', 'SYRUP', 'INJECTION'])],
-    //         'expiry_date' => ['required', 'date'],
-    //         'manufacturing_date' => ['required', 'date'],
-    //         'dimension' => ['required', 'string'],
-    //         'nafdac_code' => ['required', 'string'],
-    //         'dosage_strength' => ['required', 'string'],
-    //         'weight' => ['required', 'string'],
-    //         'unit_price' => ['required', 'numeric', 'max:999999.999'],
-    //         'purchase_price' => ['required', 'numeric', 'max:999999.999'],
-    //         'quantity_purchase' => ['required', 'numeric', 'max:999999.999'],
-    //         'batch_code' => ['required', 'string'],
-    //         'stock_alert_threshold' => ['nullable', 'integer', 'min:0']
-    //     ]);
-
-    //     try {
-    //         $staff = Auth::user();
-
-    //         $manufacturer = ProductManufacturer::find($request['manufacturer']);
-    //         if (!$manufacturer) {
-    //             return response()->json([
-    //                 'message' => 'Manufacturer detail not found',
-    //                 'success' => false,
-    //                 'status' => 'error',
-    //             ], 400);
-    //         }
-
-    //         $type = ProductType::find($request['type']);
-    //         if (!$type) {
-    //             return response()->json([
-    //                 'message' => 'Type detail not found',
-    //                 'success' => false,
-    //                 'status' => 'error',
-    //             ], 400);
-    //         }
-
-    //         $existingProduct = Product::where(function ($query) use ($request, $manufacturer) {
-    //             $query->where(function ($q) use ($request, $manufacturer) {
-    //                 $q->where('brand_name', strtolower(trim($request['brand_name'])))
-    //                     ->where('generic_name', strtolower(trim($request['generic_name'])))
-    //                     ->whereHas('manufacturer', function ($m) use ($manufacturer) {
-    //                         $m->where('name', $manufacturer->name);
-    //                     });
-    //             })
-    //                 ->orWhere('nafdac_code', $request['nafdac_code'])
-    //                 ->orWhere('batch_code', $request['batch_code']);
-    //         })->first();
-
-    //         if ($existingProduct) {
-    //             if ($existingProduct->nafdac_code === $request['nafdac_code']) {
-    //                 return response()->json([
-    //                     'message' => 'A Product with the same nafdac code already exists',
-    //                     'success' => false,
-    //                     'status' => 'error',
-    //                 ], 400);
-    //             }
-
-    //             if ($existingProduct->batch_code === $request['batch_code']) {
-    //                 return response()->json([
-    //                     'message' => 'A Product with the same batch code already exists',
-    //                     'success' => false,
-    //                     'status' => 'error',
-    //                 ], 400);
-    //             }
-
-    //             return response()->json([
-    //                 'message' => 'A Product with the same brand and generic name from the same manufacturer already exists',
-    //                 'success' => false,
-    //                 'status' => 'error',
-    //             ], 400);
-    //         }
-
-    //         // $categories = [];
-    //         // if (!empty($request['categories']) && is_array($request['categories'])) {
-    //         //     $categories = $this->productCategoryService->findManyByIds($request['categories']);
-    //         // }
-
-    //         // Create and save product
-    //         $product = new Product();
-    //         $product->brand_name = strtolower(trim($request['brand_name']));
-    //         $product->generic_name = strtolower(trim($request['generic_name']));
-    //         $product->batch_code = trim($request['batch_code']);
-    //         $product->purchase_price = (string)$request['purchase_price'];
-    //         $product->unit_price = (string)$request['unit_price'];
-    //         $product->stock_alert_threshold = $request['stock_alert_threshold'];
-    //         $product->sales_price = (string)$request['unit_price'];
-    //         $product->description = strtolower(trim($request['description'] ?? ''));
-    //         $product->dimension = strtolower($request['dimension'] ?? '');
-    //         $product->expiry_date = $request['expiry_date'];
-    //         $product->dosage_type = $request['dosage_type'];
-    //         $product->dosage_strength = $request['dosage_strength'];
-    //         $product->nafdac_code = $request['nafdac_code'];
-    //         $product->quantity_purchase = $request['quantity_purchase'];
-    //         $product->quantity_in_stock = $request['quantity_purchase'];
-    //         $product->weight = $request['weight'] ?? null;
-    //         $product->storage_condition = $request['storage_condition'] ?? null;
-    //         $product->tracking_code = strtoupper(Str::random(12));
-    //         $product->manufacturing_date = $request['manufacturing_date'];
-    //         $product->added_by_id = $staff->id;
-    //         $product->manufacturer_id = $manufacturer->id;
-    //         $product->product_type_id = $type->id;
-
-    //         DB::transaction(function () use ($product, $request, $staff) {
-    //             $product->save();
-
-    //             // if (!empty($categories)) {
-    //             //     $product->categories()->sync($categories->pluck('id'));
-    //             // }
-
-    //             $this->stockReportService->createProductStockReport([
-    //                 'destination' => 'STORE',
-    //                 'product_id' => $product->id,
-    //                 'quantity' => $request['quantity_purchase'],
-    //                 'remarks' => '',
-    //                 'staff_id' => $staff->id,
-    //                 'type' => 'stock',
-    //             ]);
-    //         });
-
-    //         return response()->json([
-    //             'message' => 'Product created successfully',
-    //             'status' => 'success',
-    //             'success' => true,
-    //         ], 201);
-    //     } catch (Exception $e) {
-    //         Log::info($e->getMessage());
-
-    //         return response()->json([
-    //             'message' => 'Something went wrong. Try again',
-    //             'status' => 'error',
-    //             'success' => false,
-    //         ], 500);
-    //     }
-    // }
-
     public function searchProductByName(Request $request)
     {
         try {
             $queryBuilder = Product::query();
 
-            // Paginate results
+            // Get search query
             $query = $request->get('q', '');
 
             // Apply search filter if provided
@@ -330,7 +187,7 @@ class ProductController extends Controller
                 });
             }
 
-            // Paginate results
+            // Always take 30 records
             $products = $queryBuilder->get();
 
             return response()->json([
@@ -341,15 +198,89 @@ class ProductController extends Controller
             ], 200);
         } catch (Exception $e) {
             Log::info($e->getMessage());
-            // Return the error message for debugging
             return response()->json([
                 'success' => false,
                 'status' => 'error',
-                'message' => 'An error occurred while retrieving patient records',
+                'message' => 'An error occurred while retrieving product records',
                 'trace' => $e->getTraceAsString()
             ], 500);
         }
     }
+
+    public function searchProducts(Request $request)
+    {
+        try {
+            $queryBuilder = Product::query();
+
+            // Get search query
+            $query = $request->get('q', '');
+
+            // Apply search filter if provided
+            if (!empty($query)) {
+                $queryBuilder->where(function ($qb) use ($query) {
+                    $qb->where('brand_name', 'like', "%$query%")
+                        ->orWhere('generic_name', 'like', "%$query%");
+                });
+            }
+
+            $queryBuilder->where('is_available', true);
+
+            // Always take 30 records
+            $products = $queryBuilder->get();
+
+            return response()->json([
+                'success' => true,
+                'status' => 'success',
+                'message' => 'Products records retrieved successfully',
+                'data' => $products
+            ], 200);
+        } catch (Exception $e) {
+            Log::info($e->getMessage());
+            return response()->json([
+                'success' => false,
+                'status' => 'error',
+                'message' => 'An error occurred while retrieving product records',
+                'trace' => $e->getTraceAsString()
+            ], 500);
+        }
+    }
+
+    public function pointOfSalesSearch(Request $request)
+    {
+        try {
+            $queryBuilder = Product::query();
+
+            $query = $request->get('q', '');
+            if (!empty($query)) {
+                $queryBuilder->where(function ($qb) use ($query) {
+                    $qb->where('brand_name', 'like', "%$query%")
+                        ->orWhere('generic_name', 'like', "%$query%");
+                });
+            }
+
+            // Use paginate (e.g., 30 per page)
+            $products = $queryBuilder->paginate(30);
+
+            return response()->json([
+                'success' => true,
+                'status' => 'success',
+                'message' => 'Products records retrieved successfully',
+                'data' => $products->items(),
+                'current_page' => $products->currentPage(),
+                'last_page' => $products->lastPage(),
+            ], 200);
+        } catch (Exception $e) {
+            Log::error($e->getMessage());
+            return response()->json([
+                'success' => false,
+                'status' => 'error',
+                'message' => 'An error occurred while retrieving product records',
+                'trace' => $e->getTraceAsString()
+            ], 500);
+        }
+    }
+
+
 
     public function searchProduct(Request $request)
     {
@@ -561,7 +492,7 @@ class ProductController extends Controller
 
     public function getOutOfStockProducts(Request $request)
     {
-        return $this->fetchProductsByStatus($request, 'OUT-OF-STOCK');
+        return $this->fetchProductsByStatus($request, 'OUT_OF_STOCK');
     }
 
     public function getExpiredProducts(Request $request)
@@ -890,6 +821,11 @@ class ProductController extends Controller
         return $this->updateStatus($id, 'DAMAGED');
     }
 
+    public function markOutOfStock($id)
+    {
+        return $this->updateStatus($id, 'OUT_OF_STOCK');
+    }
+
     public function upload(Request $request)
     {
         $request->validate([
@@ -920,10 +856,15 @@ class ProductController extends Controller
         return $this->updateStatus($id, 'AVAILABLE');
     }
 
+    public function unMarkOutOfStock($id)
+    {
+        return $this->updateStatus($id, 'AVAILABLE');
+    }
+
     private function updateStatus(int $id, string $status)
     {
         try {
-            $validStatuses = ['AVAILABLE', 'EXPIRED', 'DAMAGED'];
+            $validStatuses = ['AVAILABLE', 'EXPIRED', 'DAMAGED', 'OUT_OF_STOCK'];
 
             // Validate the new status
             if (!in_array($status, $validStatuses)) {
@@ -958,6 +899,7 @@ class ProductController extends Controller
             $product->status = $status;
             $product->last_updated_on = now();
             $product->last_updated_by_id = Auth::id();
+            $product->is_available = $status === "AVAILABLE";
             $product->save();
 
             return response()->json([

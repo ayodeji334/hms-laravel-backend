@@ -80,7 +80,7 @@ Route::middleware("auth:sanctum")->group(function () {
 
     Route::prefix('products')->group(function () {
         // Route::post('/products/upload', [ProductController::class, 'upload']);
-        Route::get('/search', [ProductController::class, 'searchProductByName']);
+        Route::get('/search', [ProductController::class, 'searchProducts']);
         Route::get('/search-products', [ProductController::class, 'searchProductByName']);
         Route::get('/', [ProductController::class, 'findAll']);
         Route::get('/inventory', [ProductController::class, 'getInventoryRecords'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
@@ -92,6 +92,8 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('{id}/un-mark-as-damaged', [ProductController::class, 'unMarkDamaged'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
         Route::get('{id}/mark-as-expired', [ProductController::class, 'markExpired'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
         Route::get('{id}/un-mark-as-expired', [ProductController::class, 'unMarkExpired'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
+        Route::get('{id}/mark-as-out-of-stock', [ProductController::class, 'markOutOfStock'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
+        Route::get('{id}/un-mark-as-out-of-stock', [ProductController::class, 'unMarkOutOfStock'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
         Route::post('/', [ProductController::class, 'create'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
         Route::patch('{id}', [ProductController::class, 'update'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
         Route::get('report', [ProductController::class, 'getReport'])->middleware('role:SUPER-ADMIN,ADMIN,PHARMACIST');
