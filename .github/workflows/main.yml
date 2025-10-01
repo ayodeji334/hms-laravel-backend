@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     
     env:
-      DEPLOY_PATH: /home/hospital/public_html/api.hospital.bowen.edu.ng
+      DEPLOY_PATH: /home3/ayodejis/api.ayodejisticksdev.com.ng
       PHP_PATH: /opt/cpanel/ea-php82/root/usr/bin
 
     steps:
