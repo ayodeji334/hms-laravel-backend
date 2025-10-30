@@ -26,110 +26,198 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class VisitationController extends Controller
 {
-    // public function create(Request $request): JsonResponse
-    // {
-    //     $validated = $request->validate(
-    //         [
-    //             'patient' => ['required', 'integer'],
-    //             'assigned_doctor' => ['required', 'integer'],
-    //             'payment_reference' => ['required', 'string'],
-    //             'date' => ['required', 'date_format:Y-m-d'],
-    //             'time' => ['required', 'regex:/^([01][0-9]|2[0-3]):[0-5][0-9]$/'],
-    //         ],
-    //         [
-    //             'patient.required' => 'Patient detail is required',
-    //             'patient.integer' => 'Patient detail contains invalid data',
-    //             'assigned_doctor.required' => 'Assigned doctor detail is required',
-    //             'assigned_doctor.integer' => 'Assigned doctor detail contains invalid data',
-    //             'payment_reference.required' => 'Payment reference detail is required',
-    //             'date.required' => 'Date is required',
-    //             'date.date_format' => 'Date contains invalid data',
-    //             'time.required' => 'Time is required',
-    //             'time.regex' => 'Time is invalid'
-    //         ]
-    //     );
+    private function getVisitationFinancialSummary($visitationId)
+    {
+        try {
+            $visitation = Visitation::with('patient.wallet')->findOrFail($visitationId);
 
-    //     try {
-    //         $staff = Auth::user();
+            $patientId = $visitation->patient_id;
+            $wallet = $visitation->patient?->wallet;
+            $now = now();
 
-    //         $patient = Patient::where('id', $validated['patient'])->first();
-    //         if (!$patient) {
-    //             throw new BadRequestHttpException('Patient detail not found');
-    //         }
+            // Calculate days spent
+            $visitationDate = Carbon::parse($visitation->admission_date);
+            $daysSpent = (int) $visitationDate->diffInDays($now) ?: 1;
 
-    //         $doctor = User::where('id', $validated['assigned_doctor'])->first();
-    //         if (!$doctor) {
-    //             throw new BadRequestHttpException('Assigned doctor detail not found');
-    //         }
+            // consultation cost
+            $consultationService = Service::where('name', 'Consulation')->first();
+            $consultationPrice = $consultationService?->price ?? 500;
+            $consultationCost = $consultationPrice * $daysSpent;
 
-    //         $overlappingVisitations = $this->findOverlapVisitations($validated['date'], $validated['time']);
-    //         if ($overlappingVisitations->count() > 0) {
-    //             throw new BadRequestHttpException('The visitation overlaps with others');
-    //         }
+            // Fetch treatment
+            $treatments = DB::table('treatments')
+                ->where('visitation_id', $visitationId)
+                ->orderBy('created_at', 'asc')
+                ->get();
 
-    //         $patientTodayVisitations = $this->findNumberOfVisitationsForPatient($patient->id, $validated['date']);
-    //         if ($patientTodayVisitations->count() > 1) {
-    //             throw new BadRequestHttpException('Patient cannot book a visitation more than twice per day');
-    //         }
+            Log::info($treatments->count(), [$visitationId]);
 
-    //         Log::info($validated['payment_reference']);
+            $treatmentIds = $treatments->pluck('id');
 
-    //         $payment = Payment::with('service')->where('transaction_reference', $validated['payment_reference'])->first();
+            // Fetch lab requests linked to treatments
+            $labRequests = DB::table('lab_requests as lr')
+                ->join('services as s', 's.id', '=', 'lr.service_id')
+                ->whereIn('lr.treatment_id', $treatmentIds)
+                ->select(
+                    'lr.id',
+                    'lr.treatment_id',
+                    'lr.priority',
+                    's.name as service_name',
+                    's.price as service_price'
+                )
+                ->get();
 
-    //         if (!$payment) {
-    //             throw new BadRequestHttpException('Payment detail not found');
-    //         }
+            $treatmentItems = DB::table('treatment_items as ti')
+                ->leftJoin('products as p', 'p.id', '=', 'ti.product_id')
+                ->whereIn('ti.treatment_id', $treatmentIds)
+                ->select(
+                    'ti.id as treatment_item_id',
+                    'ti.treatment_id',
+                    'p.brand_name as item_name',
+                    'p.unit_price',
+                    'ti.quantity',
+                    DB::raw('(COALESCE(ti.quantity,0) * COALESCE(p.unit_price,0)) as total_charge')
+                )
+                ->get();
 
-    //         if ($payment->is_used) {
-    //             throw new BadRequestHttpException('You need to make a payment. The reference has been used before');
-    //         }
 
-    //         if (!$payment->status === PaymentStatus::COMPLETED->value) {
-    //             throw new BadRequestHttpException('You need to make a payment before you can continue');
-    //         }
+            // Item cost: sum of all product charges
+            $itemsCost = $treatmentItems->sum('total_charge');
+            $testsCost = $labRequests->sum('service_price');
+            $treatmentSessionCost = $treatments->count() * 1000;
+            $treatmentCost = $treatmentSessionCost + $itemsCost;
 
-    //         $endTime = Carbon::createFromFormat('H:i', $validated['time'])->addMinutes(20)->format('H:i');
+            // Attach items + tests (lab requests) to treatments
+            $treatmentsWithItems = $treatments->map(function ($treatment) use ($treatmentItems, $labRequests) {
+                $items = $treatmentItems->where('treatment_id', $treatment->id)->values();
+                $tests = $labRequests->where('treatment_id', $treatment->id)->values();
 
-    //         $visitation = new Visitation();
-    //         $visitation->end_time = $endTime;
-    //         $visitation->start_date = $validated['date'];
-    //         $visitation->start_time = $validated['time'];
-    //         $visitation->history = json_encode([
-    //             [
-    //                 'title' => VisitationStatus::PENDING,
-    //                 'date' => now(),
-    //                 'created_by' => $staff->fullname,
-    //                 'staff_detail' => $staff->staff_id,
-    //             ]
-    //         ]);
-    //         $visitation->assignedDoctor()->associate($doctor);
-    //         $visitation->patient()->associate($patient);
-    //         $visitation->createdBy()->associate($staff);
-    //         $visitation->lastUpdatedBy()->associate($staff);
-    //         $visitation->payable_id = $payment->id;
-    //         $visitation->save();
+                return (object) [
+                    'id' => $treatment->id,
+                    'treatment_date' => $treatment->treatment_date,
+                    'treatment_type' => $treatment->treatment_type,
+                    'items' => $items,
+                    'tests' => $tests,
+                ];
+            });
 
-    //         $payment->is_used = true;
-    //         $payment->save();
+            // Calculate costs and generate records
+            $records = [];
+            $balance = 0;
+            $treatmentCost = 0;
 
-    //         return response()->json([
-    //             'message' => 'Visitation created successfully',
-    //             'status' => 'success',
-    //             'success' => true,
-    //         ]);
-    //     } catch (BadRequestHttpException $e) {
-    //         Log::error('Error creating visitation: ' . $e->getMessage());
-    //         return response()->json([
-    //             'message' => $e->getMessage(),
-    //             'status' => 'error',
-    //             'success' => false,
-    //         ], 400);
-    //     } catch (Exception $e) {
-    //         Log::error($e->getMessage());
-    //         throw new HttpException(500, 'Something went wrong. Try again');
-    //     }
-    // }
+            foreach ($treatmentsWithItems as $treatment) {
+                // Session charge (₦1000 per treatment)
+                $balance += 1000;
+                $treatmentCost += 1000;
+                $records[] = [
+                    'date' => $treatment->treatment_date,
+                    'qty' => 1,
+                    'particular' => $treatment->treatment_type . ' Treatment Charge',
+                    'charges' => 1000,
+                    'credit' => 0,
+                    'balance' => $balance,
+                ];
 
+                // Add items for the treatment
+                foreach ($treatment->items as $item) {
+                    $balance += $item->total_charge;
+                    $treatmentCost += $item->total_charge;
+                    $records[] = [
+                        'date' => $treatment->treatment_date,
+                        'qty' => $item->quantity,
+                        'particular' => $item->item_name,
+                        'charges' => $item->total_charge,
+                        'credit' => 0,
+                        'balance' => $balance,
+                    ];
+                }
+
+                foreach ($treatment->tests as $test) {
+                    $balance += $test->service_price;
+                    $treatmentCost += $test->service_price;
+                    $records[] = [
+                        'date' => $treatment->treatment_date,
+                        'qty' => 1,
+                        'particular' => $test->service_name . ' Test',
+                        'charges' => (int) $test->service_price,
+                        'credit' => 0,
+                        'balance' => $balance,
+                    ];
+                }
+            }
+
+            // Payments
+            $payments = Payment::where('patient_id', $patientId)
+                ->where('payable_type', Visitation::class)
+                ->where('payable_id', $visitationId)
+                ->where('status', 'COMPLETED')
+                ->select('id', 'amount', 'created_at as payment_date', 'transaction_reference')
+                ->orderBy('created_at', 'asc')
+                ->get();
+
+            // consultation record
+            $balance += $consultationCost;
+            $records[] = [
+                'date' => $visitation->start_date ? Carbon::parse($visitation->start_date)->format('Y-m-d') : null,
+                'qty' => 1,
+                'particular' => 'Consultation Charge',
+                'charges' => $consultationCost,
+                'credit' => 0,
+                'balance' => $balance,
+            ];
+
+            // Add payment records
+            foreach ($payments as $pay) {
+                $balance -= $pay->amount;
+                $records[] = [
+                    'date' => $pay->payment_date ? Carbon::parse($pay->payment_date)->format('Y-m-d') : null,
+                    'qty' => 1,
+                    'particular' => 'Payment (Ref: ' . $pay->transaction_reference . ')',
+                    'charges' => 0,
+                    'credit' => $pay->amount,
+                    'balance' => $balance,
+                ];
+            }
+
+            // Totals
+            $totalCharges = $consultationCost + $treatmentCost;
+            $totalPayments = $payments->sum('amount');
+            $balanceDue = max(0, $totalCharges - $totalPayments);
+            $depositBalance = $wallet?->deposit_balance ?? 0;
+
+            return [
+                'visitation' => [
+                    'id' => $visitation->id,
+                    'patient_id' => $patientId,
+                    'visitation_date' => $visitation->visitation_date,
+                    'discharge_date' => $visitation->discharge_date,
+                    'days_spent' => $daysSpent,
+                ],
+                'summary' => [
+                    'records' => $records,
+                    'consultation_cost' => (int) $consultationCost,
+                    'treatment_session_cost' => (int) $treatmentSessionCost,
+                    'item_cost' => (float) $itemsCost,
+                    'test_cost' => (float) $testsCost,
+                    'treatment_cost' => (int) $treatmentCost,
+                    'total_charges' => (float) $totalCharges,
+                    'total_payments' => (float) $totalPayments,
+                    'balance_due' => (float) $balanceDue,
+                    'deposit_balance' => (float) $depositBalance,
+                    'outstanding_balance' => max(0, $balanceDue - $depositBalance),
+                ]
+            ];
+        } catch (Exception $e) {
+            Log::error('Financial summary error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'Something went wrong. Try again in 5 minutes',
+                'status' => 'error',
+                'success' => false,
+            ], 500);
+        }
+    }
 
     public function create(Request $request): JsonResponse
     {
@@ -327,6 +415,7 @@ class VisitationController extends Controller
                 throw new BadRequestHttpException('Visitation detail not found');
             }
 
+            // Previous prescriptions
             $previousPrescriptions = Prescription::with(['requestedBy', 'items', 'items.product'])
                 ->where('patient_id', $visitation->patient_id)
                 ->where('created_at', '<', $visitation->created_at)
@@ -335,12 +424,17 @@ class VisitationController extends Controller
 
             $visitation->previousPrescriptions = $previousPrescriptions;
 
+            // Financial Summary
+            $financialSummary = $this->getVisitationFinancialSummary($visitation->id);
 
+            // Merge everything into one structured response
             return response()->json([
-                'message' => 'Visitation Fetched Successfully',
+                'message' => 'Visitation fetched successfully',
                 'status' => 'success',
                 'success' => true,
-                'data' => $visitation
+                'data' => array_merge($visitation->toArray(), [
+                    'financial_breakdown' => $financialSummary,
+                ]),
             ]);
         } catch (BadRequestHttpException $e) {
             Log::error('Visitation fetch error: ' . $e->getMessage());
@@ -354,6 +448,68 @@ class VisitationController extends Controller
             ], 500);
         }
     }
+
+
+    // public function findOne($id)
+    // {
+    //     try {
+    //         $visitation = Visitation::with([
+    //             'createdBy:id,firstname,lastname',
+    //             'lastUpdatedBy:id,firstname,lastname',
+    //             'patient.physicalExaminations.addedBy.assignedBranch',
+    //             'patient.labRequests',
+    //             'patient.wallet',
+    //             'patient.organisationHmo:id,name,type,phone_number',
+    //             'patient.labRequests.testResult',
+    //             'patient.labRequests.service',
+    //             'patient.vitalSigns',
+    //             'patient.treatments.createdBy.assignedBranch',
+    //             'assignedDoctor.assignedBranch',
+    //             'physicalExaminations',
+    //             'recommendedTests.service',
+    //             'recommendedTests.testResult',
+    //             'treatment.patient',
+    //             'prescriptions',
+    //             'payment:id,status',
+    //             'prescriptions.requestedBy',
+    //             'prescriptions.items',
+    //             'prescriptions.items.product',
+    //             'prescriptions.notes' => function ($query) {
+    //                 $query->limit(1);
+    //             }
+    //         ])->where('id', $id)->first();
+
+    //         if (!$visitation) {
+    //             throw new BadRequestHttpException('Visitation detail not found');
+    //         }
+
+    //         $previousPrescriptions = Prescription::with(['requestedBy', 'items', 'items.product'])
+    //             ->where('patient_id', $visitation->patient_id)
+    //             ->where('created_at', '<', $visitation->created_at)
+    //             ->orderBy('created_at', 'desc')
+    //             ->get();
+
+    //         $visitation->previousPrescriptions = $previousPrescriptions;
+
+
+    //         return response()->json([
+    //             'message' => 'Visitation Fetched Successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //             'data' => $visitation
+    //         ]);
+    //     } catch (BadRequestHttpException $e) {
+    //         Log::error('Visitation fetch error: ' . $e->getMessage());
+    //         throw $e;
+    //     } catch (Exception $e) {
+    //         Log::error('Unexpected error: ' . $e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
 
     public function accept($id)
     {

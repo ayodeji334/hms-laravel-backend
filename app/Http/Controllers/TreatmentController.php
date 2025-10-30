@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\AdmissionStatus;
 use App\Enums\TreatmentStatus;
 use App\Models\Admission;
 use App\Models\Note;
@@ -54,7 +55,7 @@ class TreatmentController extends Controller
 
             // Check if the patient is admitted
             $admission = Admission::where('patient_id', $patient->id)
-                ->where('status', 'ACTIVE')
+                ->where('status', AdmissionStatus::ADMITTED)
                 ->first();
 
             $visitation = null;
@@ -76,8 +77,6 @@ class TreatmentController extends Controller
             $treatment->treatment_end_date = $validated['treatment_end_date'] ?? null;
             $treatment->treatment_type = $validated['treatment_type'];
             $treatment->status = TreatmentStatus::IN_PROGRESS;
-
-            Log::info($visitation);
 
             if ($admission) {
                 $treatment->admission()->associate($admission);
@@ -274,7 +273,7 @@ class TreatmentController extends Controller
             }
 
             return response()->json([
-                'message' => 'Treatment deleted successfully',
+                'message' => 'Treatment fetched successfully',
                 'status' => 'success',
                 "success" => true,
                 'data' => $treatment

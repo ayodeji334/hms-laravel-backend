@@ -858,7 +858,7 @@ class PatientController extends Controller
 
             $treatments = Patient::findOrFail($id)
                 ->treatments()
-                ->with('createdBy')
+                ->with(['createdBy.assignedBranch:id,name', 'notes.createdBy:id,firstname,lastname,email,phone', 'prescriptions.requestedBy', 'prescriptions.items', 'tests.addedBy', 'tests.service', 'items.product:id,unit_price,brand_name,purchase_price,tracking_code'])
                 ->paginate($perPage);
 
             return response()->json([

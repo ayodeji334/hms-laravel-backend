@@ -60,4 +60,17 @@ class Product extends Model
     {
         return $this->belongsTo(ProductType::class, 'product_type_id');
     }
+
+    public function stockReports()
+    {
+        return $this->hasMany(StockReport::class);
+    }
+
+    protected static function booted()
+    {
+        static::deleting(function ($product) {
+            // Delete associated stock reports
+            $product->stockReports()->delete();
+        });
+    }
 }
