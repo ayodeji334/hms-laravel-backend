@@ -367,23 +367,23 @@ class AdmissionController extends Controller
             }
 
             // If discharged, no need to recalculate
-            if ($admission->status === 'DISCHARGED') {
-                $wallet = $admission->patient?->wallet;
-                return response()->json([
-                    'message' => 'Admission record fetched successfully',
-                    'status' => 'success',
-                    'success' => true,
-                    'data' => array_merge(
-                        $admission->toArray(),
-                        [
-                            'financial_breakdown' => [
-                                'deposit_balance' => $wallet->deposit_balance ?? 0,
-                                'outstanding_balance' => $wallet->outstanding_balance ?? 0,
-                            ]
-                        ]
-                    )
-                ], 200);
-            }
+            // if ($admission->status === 'DISCHARGED') {
+            //     $wallet = $admission->patient?->wallet;
+            //     return response()->json([
+            //         'message' => 'Admission record fetched successfully',
+            //         'status' => 'success',
+            //         'success' => true,
+            //         'data' => array_merge(
+            //             $admission->toArray(),
+            //             [
+            //                 'financial_breakdown' => [
+            //                     'deposit_balance' => $wallet->deposit_balance ?? 0,
+            //                     'outstanding_balance' => $wallet->outstanding_balance ?? 0,
+            //                 ]
+            //             ]
+            //         )
+            //     ], 200);
+            // }
 
             // Get live financial summary for active admission
             $summary = $this->getFinancialSummary($admission->id);
