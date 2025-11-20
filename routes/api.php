@@ -47,6 +47,7 @@ Route::middleware("auth:sanctum")->group(function () {
     });
 
     Route::prefix('patients')->group(function () {
+        Route::patch('/{id}/update-medical-bio', [PatientController::class, 'updateMedicalBio']);
         Route::get('/', [PatientController::class, 'findAll']);
         Route::get('/patient/{id}', [PatientController::class, 'getOne'])->middleware('role:SUPER-ADMIN,ADMIN,RECORD-KEEPER,DOCTOR,NURSE');
         Route::get('{id}', [PatientController::class, 'findOne'])->middleware('role:SUPER-ADMIN,ADMIN,RECORD-KEEPER,DOCTOR,NURSE');
@@ -155,6 +156,7 @@ Route::middleware("auth:sanctum")->group(function () {
 
     Route::prefix('payments')->middleware('role:ADMIN,SUPER-ADMIN,CASHIER')->group(function () {
         Route::get('/', [PaymentController::class, 'findAll']);
+        Route::get('generate-report', [PaymentController::class, 'exportTransactions']);
         Route::post('{id}/hmo', [PaymentController::class, 'addHMOPayment']);
         Route::patch('{id}/hmo', [PaymentController::class, 'updateHMOPayment']);
         Route::patch('{id}/update-amount-payable', [PaymentController::class, 'updateAmount']);

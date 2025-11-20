@@ -9,54 +9,15 @@ use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
-use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 
 class PhysicalExaminationController extends Controller
 {
-    //
+    /**
+     * Create a new Physical Examination
+     */
     public function create(Request $request)
     {
-        $request->validate([
-            'visitation_id' => 'required|numeric',
-            'diseases' => 'nullable|array',
-            'right_eye_vision_acuity_without_glasses' => 'nullable|string',
-            'left_eye_vision_acuity_without_glasses' => 'nullable|string',
-            'right_eye_vision_acuity_with_glasses' => 'nullable|string',
-            'left_eye_vision_acuity_with_glasses' => 'nullable|string',
-            'apex_beat' => 'nullable|string',
-            'bmi' => 'nullable|numeric',
-            'heart_sound' => 'nullable|string',
-            'blood_pressure' => 'nullable|string',
-            'pulse' => 'nullable|string',
-            'respiratory' => 'nullable|array',
-            'abdominal' => 'nullable|array',
-            'rectal' => 'nullable|array',
-            'breast' => 'nullable|array',
-            'genital' => 'nullable|array',
-            'mental_altertness' => 'nullable|string',
-            'glasgow_coma_scale' => 'nullable|string',
-            'recommendation_status' => 'nullable|string',
-            'other_examination' => 'nullable|string',
-            'recommended_test' => 'nullable|array',
-            'recommended_test.*' => 'numeric',
-        ], [
-            'visitation_id.required' => 'Visitation Field is required',
-            'visitation_id.numeric' => 'Visitation Field contains invalid data',
-            'right_eye_vision_acuity_without_glasses.string' => 'Right Eye Without Glasses Field contains invalid data',
-            'left_eye_vision_acuity_without_glasses.string' => 'Left Eye Without Glasses Field contains invalid data',
-            'right_eye_vision_acuity_with_glasses.string' => 'Right Eye With Glasses Field contains invalid data',
-            'left_eye_vision_acuity_with_glasses.string' => 'Left Eye With Glasses Field contains invalid data',
-            'apex_beat.string' => 'Apex Beats Field contains invalid data',
-            'bmi.numeric' => 'BMI Field contains invalid data',
-            'heart_sound.string' => 'Heart Sound Field contains invalid data',
-            'blood_pressure.string' => 'Blood Pressure Field contains invalid data',
-            'pulse.string' => 'Pulse Field contains invalid data',
-            'mental_altertness.string' => 'Mental Alertness Field contains invalid data',
-            'glasgow_coma_scale.string' => 'Glasgow Coma Scale Field contains invalid data',
-            'recommendation_status.string' => 'Recommendation Status Field contains invalid data',
-            'other_examination.string' => 'Other Examination Field contains invalid data',
-            'recommended_test.*.numeric' => 'Recommended Tests Field contains invalid data',
-        ]);
+        $this->validateRequest($request);
 
         try {
             $staff = Auth::user();
@@ -86,25 +47,7 @@ class PhysicalExaminationController extends Controller
             }
 
             $physicalExamination = new PhysicalExamination();
-            $physicalExamination->visitation_id = $visitation->id;
-            $physicalExamination->added_by_id = $staff->id;
-            $physicalExamination->last_updated_by_id = $staff->id;
-            $physicalExamination->apex_beat = $request->apex_beat;
-            $physicalExamination->blood_pressure = $request->blood_pressure;
-            $physicalExamination->bmi = $request->bmi;
-            $physicalExamination->heart_sound = $request->heart_sound;
-            $physicalExamination->pulse = $request->pulse;
-            $physicalExamination->mental_altertness = $request->mental_altertness;
-            $physicalExamination->glasgow_coma_scale = $request->glasgow_coma_scale;
-            $physicalExamination->recommendation_status = $request->recommendation_status;
-            $physicalExamination->other_examination = $request->other_examination;
-
-            if ($request->has('diseases')) {
-                foreach ($request->diseases as $key => $disease) {
-                    $physicalExamination->{'is_suffer_' . strtolower($key) . '_before'} = $disease['value'] ?? null;
-                    $physicalExamination->{'is_suffer_' . strtolower($key) . '_before_remark'} = $disease['comment'] ?? null;
-                }
-            }
+            $this->mapRequestToModel($physicalExamination, $request, $staff);
 
             $physicalExamination->save();
 
@@ -112,14 +55,8 @@ class PhysicalExaminationController extends Controller
                 'message' => 'Physical Examination added successfully',
                 'status' => 'success',
                 'success' => true,
+                'data' => $physicalExamination
             ]);
-        } catch (BadRequestHttpException $e) {
-            Log::info('Error accepting Visitation: ' . $e->getMessage());
-            return response()->json([
-                'message' => $e->getMessage(),
-                'status' => 'error',
-                'success' => false,
-            ], 400);
         } catch (Exception $e) {
             Log::info('Unexpected error: ' . $e->getMessage());
             return response()->json([
@@ -127,6 +64,208 @@ class PhysicalExaminationController extends Controller
                 'status' => 'error',
                 'success' => false,
             ], 500);
+        }
+    }
+
+
+    /**
+     * Fetch all physical examinations (paginated)
+     */
+    public function findAll(Request $request)
+    {
+        try {
+            $data = PhysicalExamination::with('visitation.patient', 'addedBy', 'lastUpdatedBy')
+                ->latest()
+                ->paginate($request->get('per_page', 20));
+
+            return response()->json([
+                'message' => 'Physical examinations retrieved successfully',
+                'status' => 'success',
+                'success' => true,
+                'data' => $data
+            ]);
+        } catch (Exception $e) {
+            Log::error("FindAll Error: " . $e->getMessage());
+            return response()->json([
+                'message' => 'Unable to fetch physical examinations',
+                'status' => 'error'
+            ], 500);
+        }
+    }
+
+
+    /**
+     * Fetch a single physical examination
+     */
+    public function findOne($id)
+    {
+        try {
+            $record = PhysicalExamination::with('visitation.patient', 'addedBy', 'lastUpdatedBy')
+                ->find($id);
+
+            if (!$record) {
+                return response()->json([
+                    'message' => "Physical Examination not found",
+                    'status' => 'error',
+                    'success' => false
+                ], 404);
+            }
+
+            return response()->json([
+                'message' => "Record retrieved successfully",
+                'status' => 'success',
+                'success' => true,
+                'data' => $record
+            ]);
+        } catch (Exception $e) {
+            Log::error("FindOne Error: " . $e->getMessage());
+            return response()->json([
+                'message' => "Unable to fetch record",
+                'status' => 'error'
+            ], 500);
+        }
+    }
+
+
+    /**
+     * Update physical examination
+     */
+    public function update(Request $request, $id)
+    {
+        $this->validateRequest($request, $isUpdate = true);
+
+        try {
+            $record = PhysicalExamination::find($id);
+
+            if (!$record) {
+                return response()->json([
+                    'message' => 'Record not found',
+                    'status' => 'error'
+                ], 404);
+            }
+
+            $staff = Auth::user();
+
+            $this->mapRequestToModel($record, $request, $staff, $isUpdate = true);
+            $record->save();
+
+            return response()->json([
+                'message' => 'Physical Examination updated successfully',
+                'status' => 'success',
+                'data' => $record
+            ]);
+        } catch (Exception $e) {
+            Log::error("Update Error: " . $e->getMessage());
+            return response()->json([
+                'message' => 'Something went wrong. Try again later.',
+                'status' => 'error'
+            ], 500);
+        }
+    }
+
+
+    /**
+     * Delete physical examination (if needed)
+     */
+    public function delete($id)
+    {
+        try {
+            $record = PhysicalExamination::find($id);
+
+            if (!$record) {
+                return response()->json([
+                    'message' => 'Record not found',
+                    'status' => 'error'
+                ], 404);
+            }
+
+            $record->delete();
+
+            return response()->json([
+                'message' => 'Record deleted successfully',
+                'status' => 'success'
+            ]);
+        } catch (Exception $e) {
+            Log::error("Delete Error: " . $e->getMessage());
+            return response()->json([
+                'message' => 'Unable to delete record',
+                'status' => 'error'
+            ], 500);
+        }
+    }
+
+
+    /**
+     * Shared Validation Logic
+     */
+    private function validateRequest(Request $request, $isUpdate = false)
+    {
+        $rules = [
+            'visitation_id' => $isUpdate ? 'nullable|numeric' : 'required|numeric',
+            'diseases' => 'nullable|array',
+            'right_eye_vision_acuity_without_glasses' => 'nullable|string',
+            'left_eye_vision_acuity_without_glasses' => 'nullable|string',
+            'right_eye_vision_acuity_with_glasses' => 'nullable|string',
+            'left_eye_vision_acuity_with_glasses' => 'nullable|string',
+            'apex_beat' => 'nullable|string',
+            'bmi' => 'nullable|numeric',
+            'heart_sound' => 'nullable|string',
+            'blood_pressure' => 'nullable|string',
+            'pulse' => 'nullable|string',
+            'respiratory' => 'nullable|array',
+            'abdominal' => 'nullable|array',
+            'rectal' => 'nullable|array',
+            'breast' => 'nullable|array',
+            'genital' => 'nullable|array',
+            'mental_altertness' => 'nullable|string',
+            'glasgow_coma_scale' => 'nullable|string',
+            'recommendation_status' => 'nullable|string',
+            'other_examination' => 'nullable|string',
+            'recommended_test.*' => 'numeric',
+        ];
+
+        $request->validate($rules);
+    }
+
+
+    /**
+     * Map request fields to model
+     */
+    private function mapRequestToModel(PhysicalExamination $model, Request $request, $staff, $isUpdate = false)
+    {
+        if (!$isUpdate) {
+            $model->visitation_id = $request->visitation_id;
+            $model->added_by_id = $staff->id;
+        }
+
+        $model->last_updated_by_id = $staff->id;
+
+        $fields = [
+            'apex_beat',
+            'blood_pressure',
+            'bmi',
+            'heart_sound',
+            'pulse',
+            'mental_altertness',
+            'glasgow_coma_scale',
+            'recommendation_status',
+            'other_examination',
+        ];
+
+        foreach ($fields as $field) {
+            if ($request->has($field)) {
+                $model->$field = $request->$field;
+            }
+        }
+
+        if ($request->has('diseases')) {
+            foreach ($request->diseases as $key => $disease) {
+                $model->{'is_suffer_' . strtolower($key) . '_before'} =
+                    isset($disease['value']) ? strtoupper($disease['value']) === "YES" : null;
+
+                $model->{'is_suffer_' . strtolower($key) . '_before_remark'} =
+                    $disease['comment'] ?? null;
+            }
         }
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\PaymentStatus;
+use App\Exports\TransactionsExport;
 use App\Http\Requests\CreatePaymentRequest;
 use App\Models\Admission;
 use App\Models\AnteNatal;
@@ -28,6 +29,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Maatwebsite\Excel\Excel;
 use RuntimeException;
 
 class PaymentController extends Controller
@@ -605,7 +607,7 @@ class PaymentController extends Controller
                 'addedBy',
                 'lastUpdatedBy',
                 'patient',
-            ])->find($id)->first();
+            ])->find($id);
 
             if (!$payment) {
                 response()->json([
@@ -1252,7 +1254,7 @@ class PaymentController extends Controller
                 // }
                 // handle transfer payment
                 if ($request->payment_method == 'TRANSFER') {
-                    $payment->transaction_reference = $request->transfer_reference;
+                    // $payment->transaction_reference = $request->transfer_reference;
                     $payment->bank_transfer_to = $request->bank_transfer_to;
                     $payment->transfer_charges = $request->transfer_charges ?? 0;
                 }
@@ -1464,6 +1466,26 @@ class PaymentController extends Controller
                 'message' => 'Something went wrong. Try again in 5 minutes',
                 'status' => 'error',
                 'success' => false,
+            ], 500);
+        }
+    }
+
+    public function exportTransactions(Request $request)
+    {
+        $from = $request->input('from');
+        $to = $request->input('to');
+
+        try {
+            $account = [
+                'name' => Auth::user()->name
+            ];
+
+            return Excel::download(new TransactionsExport($from, $to, $account), 'transactions-report.xlsx');
+        } catch (Exception $e) {
+            Log::error('Transaction export failed: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'Failed to export transactions. Please try again later.'
             ], 500);
         }
     }

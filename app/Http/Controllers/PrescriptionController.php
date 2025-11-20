@@ -853,7 +853,7 @@ class PrescriptionController extends Controller
         DB::beginTransaction();
 
         try {
-            $prescription = Prescription::with('payment')->find($id);
+            $prescription = Prescription::with('salesRecrod')->find($id);
 
             if (!$prescription) {
                 return response()->json([

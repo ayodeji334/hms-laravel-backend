@@ -707,6 +707,49 @@ class PatientController extends Controller
         }
     }
 
+
+    /**
+     * Update only blood_group and genotype for a patient.
+     */
+    public function updateMedicalBio(Request $request, string $id)
+    {
+        $request->validate([
+            'blood_group' => ['nullable', 'string', 'max:10'],
+            'genotype' => ['nullable', 'string', 'max:10'],
+        ], [
+            'blood_group.string' => 'Invalid blood group value.',
+            'genotype.string' => 'Invalid genotype value.',
+        ]);
+
+        try {
+            $patient = Patient::find($id);
+
+            if (!$patient) {
+                return response()->json([
+                    'status' => 'error',
+                    'success' => false,
+                    'message' => 'Patient detail not found.'
+                ], 400);
+            }
+
+            $patient->blood_group = $request->blood_group;
+            $patient->genotype = $request->genotype;
+            $patient->save();
+
+            return response()->json([
+                'message' => 'Patient Medical record updated successfully.',
+            ]);
+        } catch (Exception $e) {
+            Log::error('Updating patient medical record error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'An error occurred while trying to updating the patient record.',
+                'status' => 'error',
+                'success' => false
+            ], 500);
+        }
+    }
+
     public function getOne($id)
     {
         try {
