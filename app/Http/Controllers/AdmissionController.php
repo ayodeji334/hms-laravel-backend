@@ -13,9 +13,7 @@ use App\Models\Note;
 use App\Models\NurseReport;
 use App\Models\Patient;
 use App\Models\Payment;
-use App\Models\Prescription;
 use App\Models\Service;
-use App\Models\Treatment;
 use App\Models\User;
 use Carbon\Carbon;
 use Exception;
@@ -355,7 +353,17 @@ class AdmissionController extends Controller
                 'admittedBy',
                 'lastUpdatedBy',
                 'addedBy',
-                'bed.room.category'
+                'treatments',
+                'recommendedTests.service',
+                'recommendedTests.testResult',
+                'bed.room.category',
+                'prescriptions',
+                'prescriptions.requestedBy',
+                'prescriptions.items',
+                'prescriptions.items.product',
+                'prescriptions.notes' => function ($query) {
+                    $query->limit(1);
+                }
             ])->find($id);
 
             if (!$admission) {

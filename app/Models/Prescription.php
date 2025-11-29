@@ -22,6 +22,7 @@ class Prescription extends Model
         'last_declined_by_id',
         'patient_id',
         'visitation_id',
+        'admission_id'
     ];
 
     protected $casts = [

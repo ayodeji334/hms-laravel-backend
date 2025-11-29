@@ -1254,7 +1254,7 @@ class PaymentController extends Controller
                 // }
                 // handle transfer payment
                 if ($request->payment_method == 'TRANSFER') {
-                    // $payment->transaction_reference = $request->transfer_reference;
+                    $payment->transfer_reference = $request->transfer_reference;
                     $payment->bank_transfer_to = $request->bank_transfer_to;
                     $payment->transfer_charges = $request->transfer_charges ?? 0;
                 }

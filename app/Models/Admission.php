@@ -91,4 +91,14 @@ class Admission extends Model
     {
         return $this->morphMany(Note::class, 'noteable');
     }
+
+    public function prescriptions()
+    {
+        return $this->hasMany(Prescription::class, 'admission_id');
+    }
+
+    public function recommendedTests()
+    {
+        return $this->belongsToMany(LabRequest::class, 'service_visitation', 'admission_id', 'service_id');
+    }
 }

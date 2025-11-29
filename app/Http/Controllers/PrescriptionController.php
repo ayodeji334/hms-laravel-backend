@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\AdmissionStatus;
 use App\Enums\PrescriptionItemStatus;
 use App\Enums\PrescriptionStatus;
+use App\Models\Admission;
 use App\Models\AnteNatal;
 use App\Models\Note;
 use App\Models\Patient;
@@ -36,6 +38,7 @@ class PrescriptionController extends Controller
             'patient_id' => 'required|exists:patients,id',
             'treatment_id' => 'nullable|exists:treatments,id',
             'visitation_id' => 'nullable|exists:visitations,id',
+            'admission_id' => 'nullable|exists:admissions,id',
             'ante_natal_id' => 'nullable|exists:ante_natals,id',
             'prescription_items' => 'required|array',
             'prescription_items.*.product_id' => 'required|exists:products,id',
@@ -63,6 +66,7 @@ class PrescriptionController extends Controller
             $treatment = $validatedData['treatment_id'] ?? null ? Treatment::find($validatedData['treatment_id']) : null;
             $visitation = $validatedData['visitation_id'] ?? null ? Visitation::find($validatedData['visitation_id']) : null;
             $anteNatal = $validatedData['ante_natal_id'] ?? null ? AnteNatal::find($validatedData['ante_natal_id']) : null;
+            $admission = $validatedData['admission_id'] ?? null ? Admission::find($validatedData['admission_id']) : null;
 
             if (!empty($visitation)) {
                 if ($visitation->status === "CONSULTED") {
@@ -76,6 +80,16 @@ class PrescriptionController extends Controller
                 if ($visitation->status !== "ACCEPTED") {
                     return response()->json([
                         'message' => 'You need to accept the visitation before adding prescription',
+                        'success' => false,
+                        'status' => 'error',
+                    ], 400);
+                }
+            }
+
+            if (!empty($admission)) {
+                if ($admission->status === AdmissionStatus::DISCHARGED->value) {
+                    return response()->json([
+                        'message' => 'You cannot add prescription because the admission has been marked as DISCHARGED',
                         'success' => false,
                         'status' => 'error',
                     ], 400);
@@ -102,6 +116,7 @@ class PrescriptionController extends Controller
                 'patient_id' => $patient->id,
                 'treatment_id' => optional($treatment)->id,
                 'visitation_id' => optional($visitation)->id,
+                'admission_id' => optional($admission)->id,
                 'ante_natal_id' => optional($anteNatal)->id,
                 'requested_by_id' => $staff->id,
             ]);
