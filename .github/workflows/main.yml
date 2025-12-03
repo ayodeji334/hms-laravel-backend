@@ -12,11 +12,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout latest code
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      # 2. Setup PHP with Composer
+        
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -24,23 +22,12 @@ jobs:
           extensions: mbstring, intl, gd, pdo_mysql, bcmath, xml, curl, zip
           tools: composer:v2
           coverage: none
+          
+       - name: Install Laravel Dependencies
+        run: composer install
+      - name: Directory Permissions
+        run: chmod -R 777 storage bootstrap/cache
 
-      # 3. Install dependencies (production only)
-      - name: Install Laravel Dependencies
-        run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
-
-      # # 4. Prepare deployment package (exclude sensitive/unnecessary files)
-      # - name: Prepare Deployment Package
-      #   run: |
-      #     tar --warning=no-file-changed -czf deployment.tar.gz \
-      #       --exclude='.git' \
-      #       --exclude='.github' \
-      #       --exclude='node_modules' \
-      #       --exclude='tests' \
-      #       --exclude='.env' \
-            .
-
-      # 5. Upload package securely via SSH
       - name: Upload to Server
         uses: appleboy/scp-action@v0.1.3
         with:
@@ -51,7 +38,6 @@ jobs:
           source: "deployment.tar.gz"
           target: "/home/bmcenuwi/api.bmc-ejigbo.com"
 
-      # 6. Extract and finalize deployment on server
       - name: Post-Deployment Tasks
         uses: appleboy/ssh-action@v1.0.3
         with:
