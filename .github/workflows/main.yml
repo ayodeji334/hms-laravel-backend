@@ -29,15 +29,15 @@ jobs:
       - name: Install Laravel Dependencies
         run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
-      # 4. Prepare deployment package (exclude sensitive/unnecessary files)
-      - name: Prepare Deployment Package
-        run: |
-          tar --warning=no-file-changed -czf deployment.tar.gz \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='node_modules' \
-            --exclude='tests' \
-            --exclude='.env' \
+      # # 4. Prepare deployment package (exclude sensitive/unnecessary files)
+      # - name: Prepare Deployment Package
+      #   run: |
+      #     tar --warning=no-file-changed -czf deployment.tar.gz \
+      #       --exclude='.git' \
+      #       --exclude='.github' \
+      #       --exclude='node_modules' \
+      #       --exclude='tests' \
+      #       --exclude='.env' \
             .
 
       # 5. Upload package securely via SSH
