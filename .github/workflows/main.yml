@@ -20,7 +20,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: "8.2"
           extensions: mbstring, intl, gd, pdo_mysql, bcmath, xml, curl, zip
           tools: composer:v2
           coverage: none
@@ -79,4 +79,4 @@ jobs:
             # Run migrations safely (non-interactive)
             # php artisan migrate --force
 
-            echo "✅ Deployment completed successfully"
+            echo "✅ Deployment completed successfully!!"
