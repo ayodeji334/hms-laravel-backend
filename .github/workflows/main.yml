@@ -49,7 +49,7 @@ jobs:
           tar -czf deployment.tar.gz --exclude=".github" --exclude=".git" --exclude=".env" *
           
       - name: Upload to Server
-        uses: appleboy/scp-action@v0.1.3
+        uses: easingthemes/ssh-deploy@main
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
