@@ -161,15 +161,15 @@
 #             echo "🎉 Deployment verification passed!"
 
 
-name: Deploy Laravel to cPanel
+name: Deploy Laravel via SSH
 
 on:
   push:
     branches:
-      - main  # change to your deployment branch
+      - ejigbo
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -184,89 +184,45 @@ jobs:
           tools: composer
           coverage: none
 
-      - name: Cache composer
-        uses: actions/cache@v4
-        with:
-          path: ~/.composer/cache/files
-          key: composer-${{ runner.os }}-${{ hashFiles('**/composer.lock') }}
-          restore-keys: composer-${{ runner.os }}-
-
-      - name: Install PHP dependencies
+      - name: Install dependencies
         run: |
           composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
-      # Optional: build front-end if your Laravel app uses Vite/NPM
-      - name: Setup Node
-        if: ${{ hashFiles('**/package.json') != '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Install and build front-end
-        if: ${{ hashFiles('**/package.json') != '' }}
-        run: |
-          npm ci
-          npm run build
-
       - name: Prepare deployment package
         run: |
-          mkdir -p deploy
-          rsync -av --delete \
-            --exclude=".git" \
-            --exclude=".github" \
-            --exclude="node_modules" \
-            --exclude="tests" \
-            --exclude=".env" \
-            --exclude="storage/logs/*" \
-            --exclude="storage/framework/sessions/*" \
-            --exclude="storage/framework/testing/*" \
-            ./ deploy/
-          # Ensure built assets and vendor are included
-          cp -r vendor deploy/vendor
-          if [ -d "public/build" ]; then
-            mkdir -p deploy/public
-            cp -r public/build deploy/public/build
-          fi
+          tar -czf deployment.tar.gz \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.env' \
+            .
 
-      # Choose ONE of the deploy methods below.
-      # --- Method A: FTPS (recommended if SSH/SFTP is not available) ---
-      - name: Deploy via FTPS
-        if: ${{ env.DEPLOY_METHOD != 'sftp' }}
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+      - name: Upload package via SCP
+        uses: appleboy/scp-action@v0.1.3
         with:
-          server: ${{ secrets.CPANEL_HOST }}
-          username: ${{ secrets.CPANEL_USERNAME }}
-          password: ${{ secrets.CPANEL_PASSWORD }}
-          port: ${{ secrets.CPANEL_PORT }}
-          protocol: ${{ secrets.CPANEL_PROTOCOL }} # 'ftps'
-          local-dir: deploy
-          server-dir: ${{ secrets.CPANEL_PATH }}
-          # Safety: only remove files that we deployed
-          exclude: |
-            **/.git*
-            **/.github/**
-            node_modules/**
-            tests/**
-            .env
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "deployment.tar.gz"
+          target: "${{ secrets.DEPLOY_PATH }}"
 
-      # --- Method B: SFTP (secure, requires SSH access) ---
-      - name: Deploy via SFTP
-        if: ${{ env.DEPLOY_METHOD == 'sftp' }}
-        uses: wlixcc/SFTP-Deploy-Action@v1.2.4
+      - name: Deploy on server via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          server: ${{ secrets.CPANEL_HOST }}
-          username: ${{ secrets.CPANEL_USERNAME }}
-          password: ${{ secrets.CPANEL_PASSWORD }}
-          port: ${{ secrets.CPANEL_PORT }}
-          protocol: ${{ secrets.CPANEL_PROTOCOL }} # 'sftp'
-          local_path: 'deploy/*'
-          remote_path: ${{ secrets.CPANEL_PATH }}
-          ssh_private_key: ${{ secrets.SFTP_SSH_PRIVATE_KEY }}
-          passphrase: ${{ secrets.SFTP_SSH_PASSphrase }}
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            tar -xzf deployment.tar.gz
+            rm deployment.tar.gz
 
-      - name: Post-deploy sanity hints
-        run: |
-          echo "Deployment finished."
-          echo "Ensure server .env is present and correct."
-          echo "Set write perms for storage and bootstrap/cache on server."
+            # Ensure permissions
+            chmod -R 775 storage bootstrap/cache
 
+            # Laravel optimizations
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
