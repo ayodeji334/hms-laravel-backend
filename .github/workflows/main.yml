@@ -1,65 +1,82 @@
-name: Deploy Laravel via SSH
+name: Deploy to Production Server
 
 on:
   push:
     branches:
-      - ejigbo
+      - main
+  workflow_dispatch:
 
 jobs:
   deploy:
+    name: Hardened Laravel Deploy
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      # 1. Checkout latest code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
+      # 2. Setup PHP with Composer
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
           extensions: mbstring, intl, gd, pdo_mysql, bcmath, xml, curl, zip
-          tools: composer
+          tools: composer:v2
           coverage: none
 
-      - name: Install dependencies
-        run: |
-          composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+      # 3. Install dependencies (production only)
+      - name: Install Laravel Dependencies
+        run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
-      - name: Prepare deployment package
+      # 4. Prepare deployment package (exclude sensitive/unnecessary files)
+      - name: Prepare Deployment Package
         run: |
-         rsync -avz --delete \
-              --exclude='.git' \
-              --exclude='.github' \
-              --exclude='node_modules' \
-              --exclude='.env' \
-              ./ ${{ secrets.REMOTE_USER }}@${{ secrets.REMOTE_HOST }}:${{ secrets.EJIGBO_DEPLOYMENT_PATH }}
+          tar --warning=no-file-changed -czf deployment.tar.gz \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='tests' \
+            --exclude='.env' \
+            .
 
-      - name: Upload package via SCP
+      # 5. Upload package securely via SSH
+      - name: Upload to Server
         uses: appleboy/scp-action@v0.1.3
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
-          port: ${{ secrets.SSH_PORT }}
+          port: ${{ secrets.SSH_REMOTE_PORT }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           source: "deployment.tar.gz"
-          target: "${{ secrets.DEPLOY_PATH }}"
+          target: "/home/bmcenuwi/api.bmc-ejigbo.com"
 
-      - name: Deploy on server via SSH
+      # 6. Extract and finalize deployment on server
+      - name: Post-Deployment Tasks
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
-          port: ${{ secrets.SSH_PORT }}
+          port: ${{ secrets.SSH_REMOTE_PORT }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd ${{ secrets.DEPLOY_PATH }}
+            set -euo pipefail
+            cd /home/bmcenuwi/api.bmc-ejigbo.com
+
+            # Extract new code
             tar -xzf deployment.tar.gz
             rm deployment.tar.gz
 
-            # Ensure permissions
+            # Ensure correct permissions (avoid 777)
             chmod -R 775 storage bootstrap/cache
 
-            # Laravel optimizations
+            # Laravel cache optimizations
+            php artisan optimize:clear
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
+
+            # Run migrations safely (non-interactive)
+            # php artisan migrate --force
+
+            echo "✅ Deployment completed successfully"
