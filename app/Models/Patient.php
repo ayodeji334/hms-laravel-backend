@@ -28,6 +28,7 @@ class Patient extends Model
         'firstname',
         'lastname',
         'middlename',
+        'is_admitted',
         'gender',
         'permanent_address',
         'contact_address',

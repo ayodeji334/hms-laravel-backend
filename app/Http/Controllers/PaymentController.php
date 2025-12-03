@@ -683,31 +683,25 @@ class PaymentController extends Controller
     public function create(CreatePaymentRequest $request)
     {
         $data = $request->validated();
+
+        Log::info($data);
         DB::beginTransaction();
 
         $serviceTypeMap = [
-            'LAB-TEST' => LabRequest::class,
-            'TREATMENT' => Treatment::class,
-            'ADMISSION' => Admission::class,
-            'ACCOUNT' => Patient::class,
-            'HMO' => OrganisationAndHmo::class,
-            'CONSULTATION' => Visitation::class,
-            'ANTE-NATAL' => AnteNatal::class,
+            'LAB-TEST'       => LabRequest::class,
+            'TREATMENT'      => Treatment::class,
+            'ADMISSION'      => Admission::class,
+            'ACCOUNT'        => Patient::class,
+            'HMO'            => OrganisationAndHmo::class,
+            'CONSULTATION'   => Visitation::class,
+            'ANTE-NATAL'     => AnteNatal::class,
             'RADIOLOGY-TEST' => RadiologyRequest::class,
         ];
 
         try {
-            $staffId = Auth::user()->id;
+            $staffId = Auth::id();
 
-            // Deposit can only be made for patients
-            if ($data['payment_type'] == 'DEPOSIT' && empty($data['is_patient'])) {
-                return response()->json([
-                    'message' => 'You can only make deposit for a patient',
-                    'status' => 'error',
-                    'success' => false
-                ], 400);
-            }
-
+            // Patient check
             $patient = null;
             if (!empty($data['is_patient'])) {
                 $patient = Patient::with('wallet')->find($data['patient_id']);
@@ -721,93 +715,94 @@ class PaymentController extends Controller
             }
 
             $payableType = null;
-            $payableId = null;
+            $payableId   = null;
             $payableTypeName = null;
+            $amountPayable = 0;
 
-            if ($data['payment_type'] == 'SERVICE') {
-                $payableId = $data['service_id'] ?? null;
-                if (!$payableId) {
+            // 🔹 Admission payments (on-the-go)
+            if ($data['payment_type'] === 'ADMISSION') {
+                $admission = Admission::find($data['admission_id']);
+                // ->whereNull('discharge_date')
+                // ->first();
+
+                if (!$admission) {
                     return response()->json([
-                        'message' => 'Service ID (payable_id) is required for SERVICE payments',
+                        'message' => 'No active admission found',
                         'status' => 'error',
-                        'success' => false,
-                    ], 400);
+                        'success' => false
+                    ], 404);
                 }
 
-                // Find the service to get type and price
-                $service = Service::find($payableId);
-                if (!$service) {
-                    return response()->json([
-                        'message' => 'Invalid service selected',
-                        'status' => 'error',
-                        'success' => false,
-                    ], 400);
-                }
-
-                // Get payable type model from service type
-                if (!array_key_exists($service->type, $serviceTypeMap)) {
-                    return response()->json([
-                        'message' => 'Unsupported service type for payment',
-                        'status' => 'error',
-                        'success' => false,
-                    ], 400);
-                }
-
-                $payableType = $serviceTypeMap[$service->type];
-                $payableTypeName = $service->type;
+                $amountPayable = $data['amount']; // patient pays partial or full
+                $payableType   = Admission::class;
+                $payableId     = $admission->id;
+                $payableTypeName = 'ADMISSION';
             }
 
-            $transactionReference = $this->generateUniqueTransactionReference();
-
-            $payment = new Payment();
-            $payment->amount = $data['payment_type'] == 'DEPOSIT'
-                ? $data['amount']
-                : number_format($service->price ?? 0, 3, '.', '');
-            $payment->amount_payable = round($payment->amount);
-            $payment->customer_name = $data['is_patient']
-                ? ($patient->firstname . ' ' . $patient->lastname)
-                : $data['customer_name'] ?? null;
-            $payment->reference = $transactionReference;
-            $payment->transaction_reference = $transactionReference;
-            $payment->patient_id = $data['is_patient'] ? $patient->id : null;
-            $payment->payable_type = $payableType;
-            $payment->added_by_id = $staffId;
-            $payment->confirmed_by_id = $staffId;
-            $payment->payment_method = $data['payment_method'] == 'ACCOUNT-BALANCE' ? 'WALLET' : $data['payment_method'];
-            $payment->type = $data['payment_type'] == 'DEPOSIT' ? 'DEPOSIT' : $payableTypeName;
-            $payment->history = json_encode([
-                ['date' => now()->toDateTimeString(), 'title' => 'CREATED'],
-                ['date' => now()->toDateTimeString(), 'title' => 'PAID']
-            ]);
-            $payment->last_updated_by_id = $staffId;
-
-            if ($data['payment_method'] == 'HMO') {
-                $insurance = OrganisationAndHmo::find($data['hmo_id']);
-                if (!$insurance) {
+            // 🔹 Deposit payments
+            elseif ($data['payment_type'] === 'DEPOSIT') {
+                if (empty($data['is_patient'])) {
                     return response()->json([
-                        'message' => 'Invalid HMO provider',
+                        'message' => 'You can only make deposit for a patient',
                         'status' => 'error',
                         'success' => false
                     ], 400);
                 }
-
-                if (!$patient || $patient->organisation_hmo_id != $insurance->id) {
-                    return response()->json([
-                        'message' => 'The patient does not have an account with the selected organisation or health care provider',
-                        'status' => 'error',
-                        'success' => false,
-                    ], 400);
-                }
-
-                $payment->payable_id = $insurance->id;
+                $amountPayable = $data['amount'];
+                $payableType   = Patient::class;
+                $payableId     = $patient->id;
+                $payableTypeName = 'DEPOSIT';
             }
 
-            $payment->load(['addedBy', 'lastUpdatedBy', 'patient', 'payable'])->save();
+            // 🔹 Service payments
+            elseif ($data['payment_type'] === 'SERVICE') {
+                $service = Service::find($data['service_id']);
+                Log::info("Service", [$service]);
+                if (!$service || !array_key_exists($service->type, $serviceTypeMap)) {
+                    return response()->json([
+                        'message' => 'Invalid or unsupported service',
+                        'status' => 'error',
+                        'success' => false
+                    ], 400);
+                }
+                $amountPayable = floatval($service->price);
+                $payableType   = $serviceTypeMap[$service->type];
+                $payableId     = $service->id;
+                $payableTypeName = $service->type;
+            }
+
+            Log::info("Hello: ", ["payableType" => $payableType, "payableId" => $payableId]);
+
+            $transactionReference = $this->generateUniqueTransactionReference();
+
+            $payment = Payment::create([
+                'amount' => $amountPayable,
+                'amount_payable' => $amountPayable,
+                'transaction_reference' => $transactionReference,
+                'reference' => $transactionReference,
+                'type' => $payableTypeName,
+                'status' => 'CREATED',
+                'payment_method' => $data['payment_method'] == 'ACCOUNT-BALANCE' ? 'WALLET' : $data['payment_method'],
+                'remark' => ucfirst($payableTypeName) . ' payment',
+                'customer_name' => $patient
+                    ? ($patient->firstname . ' ' . $patient->lastname)
+                    : $data['customer_name'] ?? 'Unknown',
+                'is_confirmed' => true,
+                'payable_type' => $payableType,
+                'payable_id' => $payableId,
+                'patient_id' => $patient ? $patient->id : null,
+                'added_by_id' => $staffId,
+                'confirmed_by_id' => $staffId,
+                'last_updated_by_id' => $staffId,
+                'history' => json_encode([
+                    ['date' => now()->toDateTimeString(), 'title' => 'CREATED'],
+                ]),
+            ]);
 
             DB::commit();
 
             return response()->json([
-                'message' => 'Payment detail created Successfully',
+                'message' => 'Payment created successfully',
                 'status' => 'success',
                 'success' => true,
                 'data' => $payment
@@ -823,6 +818,151 @@ class PaymentController extends Controller
             ], 500);
         }
     }
+
+
+    // public function create(CreatePaymentRequest $request)
+    // {
+    //     $data = $request->validated();
+    //     DB::beginTransaction();
+
+    //     $serviceTypeMap = [
+    //         'LAB-TEST' => LabRequest::class,
+    //         'TREATMENT' => Treatment::class,
+    //         'ADMISSION' => Admission::class,
+    //         'ACCOUNT' => Patient::class,
+    //         'HMO' => OrganisationAndHmo::class,
+    //         'CONSULTATION' => Visitation::class,
+    //         'ANTE-NATAL' => AnteNatal::class,
+    //         'RADIOLOGY-TEST' => RadiologyRequest::class,
+    //     ];
+
+    //     try {
+    //         $staffId = Auth::user()->id;
+
+    //         // Deposit can only be made for patients
+    //         if ($data['payment_type'] == 'DEPOSIT' && empty($data['is_patient'])) {
+    //             return response()->json([
+    //                 'message' => 'You can only make deposit for a patient',
+    //                 'status' => 'error',
+    //                 'success' => false
+    //             ], 400);
+    //         }
+
+    //         $patient = null;
+    //         if (!empty($data['is_patient'])) {
+    //             $patient = Patient::with('wallet')->find($data['patient_id']);
+    //             if (!$patient) {
+    //                 return response()->json([
+    //                     'message' => 'Patient not found',
+    //                     'status' => 'error',
+    //                     'success' => false
+    //                 ], 400);
+    //             }
+    //         }
+
+    //         $payableType = null;
+    //         $payableId = null;
+    //         $payableTypeName = null;
+
+    //         if ($data['payment_type'] == 'SERVICE') {
+    //             $payableId = $data['service_id'] ?? null;
+    //             if (!$payableId) {
+    //                 return response()->json([
+    //                     'message' => 'Service ID (payable_id) is required for SERVICE payments',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             // Find the service to get type and price
+    //             $service = Service::find($payableId);
+    //             if (!$service) {
+    //                 return response()->json([
+    //                     'message' => 'Invalid service selected',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             // Get payable type model from service type
+    //             if (!array_key_exists($service->type, $serviceTypeMap)) {
+    //                 return response()->json([
+    //                     'message' => 'Unsupported service type for payment',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             $payableType = $serviceTypeMap[$service->type];
+    //             $payableTypeName = $service->type;
+    //         }
+
+    //         $transactionReference = $this->generateUniqueTransactionReference();
+
+    //         $payment = new Payment();
+    //         $payment->amount = $data['payment_type'] == 'DEPOSIT'
+    //             ? $data['amount']
+    //             : number_format($service->price ?? 0, 3, '.', '');
+    //         $payment->amount_payable = round($payment->amount);
+    //         $payment->customer_name = $data['is_patient']
+    //             ? ($patient->firstname . ' ' . $patient->lastname)
+    //             : $data['customer_name'] ?? null;
+    //         $payment->reference = $transactionReference;
+    //         $payment->transaction_reference = $transactionReference;
+    //         $payment->patient_id = $data['is_patient'] ? $patient->id : null;
+    //         $payment->payable_type = $payableType;
+    //         $payment->added_by_id = $staffId;
+    //         $payment->confirmed_by_id = $staffId;
+    //         $payment->payment_method = $data['payment_method'] == 'ACCOUNT-BALANCE' ? 'WALLET' : $data['payment_method'];
+    //         $payment->type = $data['payment_type'] == 'DEPOSIT' ? 'DEPOSIT' : $payableTypeName;
+    //         $payment->history = json_encode([
+    //             ['date' => now()->toDateTimeString(), 'title' => 'CREATED'],
+    //             ['date' => now()->toDateTimeString(), 'title' => 'PAID']
+    //         ]);
+    //         $payment->last_updated_by_id = $staffId;
+
+    //         if ($data['payment_method'] == 'HMO') {
+    //             $insurance = OrganisationAndHmo::find($data['hmo_id']);
+    //             if (!$insurance) {
+    //                 return response()->json([
+    //                     'message' => 'Invalid HMO provider',
+    //                     'status' => 'error',
+    //                     'success' => false
+    //                 ], 400);
+    //             }
+
+    //             if (!$patient || $patient->organisation_hmo_id != $insurance->id) {
+    //                 return response()->json([
+    //                     'message' => 'The patient does not have an account with the selected organisation or health care provider',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             $payment->payable_id = $insurance->id;
+    //         }
+
+    //         $payment->load(['addedBy', 'lastUpdatedBy', 'patient', 'payable'])->save();
+
+    //         DB::commit();
+
+    //         return response()->json([
+    //             'message' => 'Payment detail created Successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //             'data' => $payment
+    //         ]);
+    //     } catch (Exception $e) {
+    //         DB::rollBack();
+    //         Log::error('Payment creation error: ' . $e->getMessage());
+
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false
+    //         ], 500);
+    //     }
+    // }
 
     public function createPharmacySalesPayment(
         $saleRecord,

@@ -23,6 +23,9 @@ class Payment extends Model
         'customer_name',
         'amount_payable',
         'payable',
+        "payable_id",
+        "patient_id",
+        'payable_type',
         "parent_id"
     ];
 

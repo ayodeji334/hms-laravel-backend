@@ -16,7 +16,7 @@ class RoomController extends Controller
         $validatedData = $request->validate([
             'name' => 'required|string|max:255',
             'category' => 'required|numeric|exists:room_categories,id',
-            // 'branch' => 'required|numeric|exists:branches,id',
+            'bed_charges' => 'required|numeric',
         ]);
 
         try {
@@ -32,7 +32,7 @@ class RoomController extends Controller
             $room = new Room();
             $room->name = strtoupper(trim($validatedData['name']));
             $room->room_category_id = $validatedData['category'];
-            // $room->branch_id = $validatedData['branch'];
+            $room->bed_space_charges = $validatedData['bed_charges'];
             $room->created_by_id = $staffId;
             $room->last_updated_by_id = $staffId;
             $room->save();
@@ -179,6 +179,7 @@ class RoomController extends Controller
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'category' => 'required|integer|exists:room_categories,id',
+            'bed_charges' => 'required|numeric',
             // 'branch' => 'required|integer|exists:branches,id',
         ]);
         try {
@@ -225,6 +226,7 @@ class RoomController extends Controller
             $room->update([
                 'name' => trim($data['name']),
                 // 'branch_id' => $branch->id,
+                'bed_space_charges' => $data['bed_charges'],
                 'room_category_id' => $category->id,
                 'last_updated_by' => $staff->id,
             ]);

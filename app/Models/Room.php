@@ -17,7 +17,8 @@ class Room extends Model
         'category_id',
         'created_by_id',
         'last_updated_by_id',
-        'last_deleted_by_id'
+        'last_deleted_by_id',
+        'bed_space_charges'
     ];
 
     protected function casts()

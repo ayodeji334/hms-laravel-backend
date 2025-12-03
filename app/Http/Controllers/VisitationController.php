@@ -30,15 +30,14 @@ class VisitationController extends Controller
     private function getVisitationFinancialSummary($visitationId)
     {
         try {
-            $visitation = Visitation::with('patient.wallet')->findOrFail($visitationId);
+            $visitation = Visitation::with('patient')->findOrFail($visitationId);
 
             $patientId = $visitation->patient_id;
-            $wallet = $visitation->patient?->wallet;
             $now = now();
 
             // Calculate days spent
             $visitationDate = Carbon::parse($visitation->admission_date);
-            $daysSpent = (int) $visitationDate->diffInDays($now) ?: 1;
+            $daysSpent = max(1, (int) $visitationDate->diffInDays($now));
 
             // consultation cost
             $consultationService = Service::where('name', 'Consulation')->first();
@@ -50,8 +49,6 @@ class VisitationController extends Controller
                 ->where('visitation_id', $visitationId)
                 ->orderBy('created_at', 'asc')
                 ->get();
-
-            Log::info($treatments->count(), [$visitationId]);
 
             $treatmentIds = $treatments->pluck('id');
 
@@ -108,7 +105,6 @@ class VisitationController extends Controller
             $treatmentCost = 0;
 
             foreach ($treatmentsWithItems as $treatment) {
-                // Session charge (₦1000 per treatment)
                 $balance += 1000;
                 $treatmentCost += 1000;
                 $records[] = [
@@ -127,7 +123,7 @@ class VisitationController extends Controller
                     $records[] = [
                         'date' => $treatment->treatment_date,
                         'qty' => $item->quantity,
-                        'particular' => $item->item_name,
+                        'particular' => $item->item_name . "Drugs",
                         'charges' => $item->total_charge,
                         'credit' => 0,
                         'balance' => $balance,
@@ -185,7 +181,6 @@ class VisitationController extends Controller
             $totalCharges = $consultationCost + $treatmentCost;
             $totalPayments = $payments->sum('amount');
             $balanceDue = max(0, $totalCharges - $totalPayments);
-            $depositBalance = $wallet?->deposit_balance ?? 0;
 
             return [
                 'visitation' => [
@@ -204,9 +199,7 @@ class VisitationController extends Controller
                     'treatment_cost' => (int) $treatmentCost,
                     'total_charges' => (float) $totalCharges,
                     'total_payments' => (float) $totalPayments,
-                    'balance_due' => (float) $balanceDue,
-                    'deposit_balance' => (float) $depositBalance,
-                    'outstanding_balance' => max(0, $balanceDue - $depositBalance),
+                    'outstanding_balance' => (float) $balanceDue,
                 ]
             ];
         } catch (Exception $e) {
