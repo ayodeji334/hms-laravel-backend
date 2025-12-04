@@ -8,7 +8,7 @@ on:
 
 jobs:
   deploy:
-    name: Hardened Laravel Deploy.......
+    name: Hardened Laravel Deploy
     runs-on: ubuntu-latest
 
     steps:
