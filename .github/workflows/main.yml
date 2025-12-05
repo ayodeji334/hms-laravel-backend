@@ -48,48 +48,6 @@ jobs:
 
           tar -czf deployment.tar.gz --exclude=".github" --exclude=".git" --exclude=".env" *
 
-      # - name: Upload to Server
-      #   uses: easingthemes/ssh-deploy@main
-      #   with:
-      #     SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-      #     REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
-      #     REMOTE_USER: ${{ secrets.REMOTE_USER }}
-      #     REMOTE_PORT: ${{ secrets.SSH_REMOTE_PORT }}
-      #     SOURCE: "deployment.tar.gz"
-      #     TARGET: "/home/bmcenuwi/api.bmc-ejigbo.com"
-
-      # - name: Post-Deployment Tasks
-      #   uses: appleboy/ssh-action@v1.0.3
-      #   with:
-      #     host: ${{ secrets.REMOTE_HOST }}
-      #     username: ${{ secrets.REMOTE_USER }}
-      #     port: ${{ secrets.SSH_REMOTE_PORT }}
-      #     key: ${{ secrets.SSH_PRIVATE_KEY }}
-      #     script: |
-      #       set -euo pipefail
-      #       cd /home/bmcenuwi/api.bmc-ejigbo.com
-
-      #       # Backup current .env
-      #       if [ -f .env ]; then
-      #         cp .env .env.backup
-      #       fi
-
-      #       # Extract new code
-      #       tar -xzf deployment.tar.gz
-      #       rm deployment.tar.gz
-
-      #       # Restore .env
-      #       if [ -f .env.backup ]; then
-      #         mv .env.backup .env
-      #       fi
-
-      #       # Set correct permissions
-      #       chmod -R 775 storage bootstrap/cache
-      #       chmod 644 .env
-
-      #       # Set ownership (adjust as needed)
-      #       chown -R bmcenuwi:bmcenuwi .
-      # For easingthemes/ssh-deploy
       - name: Upload to Server
         uses: easingthemes/ssh-deploy@main
         with:
@@ -99,9 +57,7 @@ jobs:
           REMOTE_PORT: ${{ secrets.SSH_REMOTE_PORT }}
           SOURCE: "deployment.tar.gz"
           TARGET: "/home/bmcenuwi/api.bmc-ejigbo.com"
-          ARGS: "-o StrictHostKeyChecking=no"
-      
-      # For appleboy/ssh-action
+
       - name: Post-Deployment Tasks
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -110,9 +66,30 @@ jobs:
           port: ${{ secrets.SSH_REMOTE_PORT }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            whoami && pwd   # debug
-            ...
-          strict_host_key_checking: false
+            set -euo pipefail
+            cd /home/bmcenuwi/api.bmc-ejigbo.com
+
+            # Backup current .env
+            if [ -f .env ]; then
+              cp .env .env.backup
+            fi
+
+            # Extract new code
+            tar -xzf deployment.tar.gz
+            rm deployment.tar.gz
+
+            # Restore .env
+            if [ -f .env.backup ]; then
+              mv .env.backup .env
+            fi
+
+            # Set correct permissions
+            chmod -R 775 storage bootstrap/cache
+            chmod 644 .env
+
+            # Set ownership (adjust as needed)
+            chown -R bmcenuwi:bmcenuwi .
+
             # Laravel optimizations
             php artisan optimize:clear
             php artisan config:cache
