@@ -58,42 +58,90 @@ jobs:
           SOURCE: "deployment.tar.gz"
           TARGET: "/home/bmcenuwi/api.bmc-ejigbo.com"
 
+      # - name: Post-Deployment Tasks
+      #   uses: appleboy/ssh-action@v1.0.3
+      #   with:
+      #     host: ${{ secrets.REMOTE_HOST }}
+      #     username: ${{ secrets.REMOTE_USER }}
+      #     port: ${{ secrets.SSH_REMOTE_PORT }}
+      #     key: ${{ secrets.SSH_PRIVATE_KEY }}
+      #     script: |
+      #       set -euo pipefail
+      #       cd /home/bmcenuwi/api.bmc-ejigbo.com
+
+      #       # Backup current .env
+      #       if [ -f .env ]; then
+      #         cp .env .env.backup
+      #       fi
+
+      #       # Extract new code
+      #       tar -xzf deployment.tar.gz
+      #       rm deployment.tar.gz
+
+      #       # Restore .env
+      #       if [ -f .env.backup ]; then
+      #         mv .env.backup .env
+      #       fi
+
+      #       # Set correct permissions
+      #       chmod -R 775 storage bootstrap/cache
+      #       chmod 644 .env
+
+      #       # Set ownership (adjust as needed)
+      #       chown -R bmcenuwi:bmcenuwi .
+
+      #       # Laravel optimizations
+      #       php artisan optimize:clear
+      #       php artisan config:cache
+      #       php artisan route:cache
+      #       php artisan view:cache
+
+      #       echo "✅ Deployment completed successfully!!"
       - name: Post-Deployment Tasks
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
-          port: ${{ secrets.SSH_REMOTE_PORT }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_REMOTE_PORT }}
           script: |
             set -euo pipefail
-            cd /home/bmcenuwi/api.bmc-ejigbo.com
-
-            # Backup current .env
+            cd /home/${{ secrets.REMOTE_USER }}/api.bmc-ejigbo.com
+      
+            echo "🟢 Starting post-deployment tasks..."
+      
+            # Backup existing .env if it exists
             if [ -f .env ]; then
+              echo "Backing up existing .env..."
               cp .env .env.backup
             fi
-
-            # Extract new code
+      
+            # Extract new deployment
+            echo "Extracting deployment.tar.gz..."
             tar -xzf deployment.tar.gz
             rm deployment.tar.gz
-
-            # Restore .env
+      
+            # Restore .env from backup if it exists
             if [ -f .env.backup ]; then
+              echo "Restoring .env from backup..."
               mv .env.backup .env
             fi
-
-            # Set correct permissions
-            chmod -R 775 storage bootstrap/cache
-            chmod 644 .env
-
-            # Set ownership (adjust as needed)
-            chown -R bmcenuwi:bmcenuwi .
-
+      
+            # Set permissions safely
+            echo "Setting permissions..."
+            [ -d storage ] && chmod -R 775 storage
+            [ -d bootstrap/cache ] && chmod -R 775 bootstrap/cache
+            [ -f .env ] && chmod 644 .env
+      
+            # Set ownership (adjust user/group if needed)
+            chown -R ${{ secrets.REMOTE_USER }}:${{ secrets.REMOTE_USER }} .
+      
             # Laravel optimizations
-            php artisan optimize:clear
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
+            echo "Running Laravel optimizations..."
+            php artisan optimize:clear || true
+            php artisan config:cache || true
+            php artisan route:cache || true
+            php artisan view:cache || true
+      
+            echo "✅ Deployment completed successfully!"
 
-            echo "✅ Deployment completed successfully!!"
