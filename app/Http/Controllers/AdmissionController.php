@@ -15,9 +15,7 @@ use App\Models\Patient;
 use App\Models\Payment;
 use App\Models\ProductSales;
 use App\Models\Service;
-use App\Models\Treatment;
 use App\Models\User;
-use App\Models\WalletTransaction;
 use Carbon\Carbon;
 use Exception;
 use Illuminate\Http\Request;
@@ -25,7 +23,6 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Throwable;
 
 class AdmissionController extends Controller
 {
