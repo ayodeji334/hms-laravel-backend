@@ -40,13 +40,13 @@ jobs:
       - name: Create Deployment Package
         run: |
           rm -rf node_modules/
-          rm -rf tests/
-          rm -rf .git/
-          rm -f .gitignore
-          rm -f .env.example
-          rm -f phpunit.xml
+          # rm -rf tests/
+          # rm -rf .git/
+          # rm -f .gitignore
+          # rm -f .env.example
+          # rm -f phpunit.xml
 
-          tar -czf deployment.tar.gz --exclude=".github" --exclude=".git" --exclude=".env" *
+          tar -czf deployment.tar.gz --exclude=".git"
 
       - name: Upload to Server
         uses: easingthemes/ssh-deploy@main
@@ -57,7 +57,7 @@ jobs:
           REMOTE_PORT: ${{ secrets.SSH_REMOTE_PORT }}
           SOURCE: "deployment.tar.gz"
           TARGET: "/home/bmcenuwi/api.bmc-ejigbo.com"
-          
+
       - name: Post-Deployment Tasks
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -68,41 +68,40 @@ jobs:
           script: |
             set -euo pipefail
             cd /home/${{ secrets.REMOTE_USER }}/api.bmc-ejigbo.com
-      
+
             echo "🟢 Starting post-deployment tasks..."
-      
+
             # Backup existing .env if it exists
             if [ -f .env ]; then
               echo "Backing up existing .env..."
               cp .env .env.backup
             fi
-      
+
             # Extract new deployment
             echo "Extracting deployment.tar.gz..."
             tar -xzf deployment.tar.gz
             rm deployment.tar.gz
-      
+
             # Restore .env from backup if it exists
             if [ -f .env.backup ]; then
               echo "Restoring .env from backup..."
               mv .env.backup .env
             fi
-      
+
             # Set permissions safely
             echo "Setting permissions..."
             [ -d storage ] && chmod -R 775 storage
             [ -d bootstrap/cache ] && chmod -R 775 bootstrap/cache
             [ -f .env ] && chmod 644 .env
-      
+
             # Set ownership (adjust user/group if needed)
             chown -R ${{ secrets.REMOTE_USER }}:${{ secrets.REMOTE_USER }} .
-      
+
             # Laravel optimizations
             echo "Running Laravel optimizations..."
             php artisan optimize:clear || true
             php artisan config:cache || true
             php artisan route:cache || true
             php artisan view:cache || true
-      
-            echo "✅ Deployment completed successfully!"
 
+            echo "✅ Deployment completed successfully!"
