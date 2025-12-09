@@ -61,10 +61,10 @@
 <body>
 <div class="receipt">
     <div class="header">
-        <h3>Bowen University Teaching Hospital</h3>
+        <h3>Baptist Hospital, Ejigbo</h3>
         <h6>No. 1, Beaside Baptist Theology Seminary College</h6>
-        <h6>Ogbomoso, Oyo State, Nigeria</h6>
-        <h6><strong>Email: contact@bowenhospital.org<strong></h6>
+        <h6>Ejigbo, Osun state, Nigeria</h6>
+        <h6><strong>Email: contact@baptisthospital.org<strong></h6>
         
         <div class="divider"></div>
         
