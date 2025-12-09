@@ -40,13 +40,13 @@ jobs:
       - name: Create Deployment Package
         run: |
           rm -rf node_modules/
-          # rm -rf tests/
-          # rm -rf .git/
-          # rm -f .gitignore
-          # rm -f .env.example
-          # rm -f phpunit.xml
+          rm -rf tests/
+          rm -rf .git/
+          rm -f .gitignore
+          rm -f .env.example
+          rm -f phpunit.xml
 
-          tar -czf deployment.tar.gz --exclude=".git"
+          tar -czf deployment.tar.gz --exclude=".env" *
 
       - name: Upload to Server
         uses: easingthemes/ssh-deploy@main
