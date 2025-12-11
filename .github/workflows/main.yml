@@ -156,7 +156,7 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
           REMOTE_USER: ${{ secrets.REMOTE_USER }}
-          TARGET: /home/hospital/public_html/api.hospital.bowen.edu.ng
+          TARGET: /home/${{ secrets.REMOTE_USER }}/api.bmc-ejigbo.com
           REMOTE_PORT: ${{ secrets.SSH_REMOTE_PORT }}
       
       - name: Post install
