@@ -57,7 +57,7 @@ jobs:
           REMOTE_USER: ${{ secrets.REMOTE_USER }}
           REMOTE_PORT: ${{ secrets.SSH_REMOTE_PORT }}
           SOURCE: "deployment.tar.gz"
-          TARGET: "/home/bmcenuwi/api.bmc-ejigbo.com"
+          TARGET: "/home/bmcenuwi/emr.bmc-ejigbo.com"
 
       - name: Post-Deployment Tasks
         uses: appleboy/ssh-action@v1.0.3
