@@ -129,6 +129,9 @@ class AdmissionController extends Controller
                 $bed->assigned_patient_id = $patient->id;
                 $bed->save();
 
+                $patient->is_admitted = true;
+                $patient->save();
+
                 return response()->json([
                     'message' => 'Admission Record Created successfully',
                     'success' => true,
