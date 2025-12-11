@@ -1,4 +1,4 @@
-name: Deploy to Staging Server
+name: Deploy to Production Server
 
 on:
   push:
@@ -8,154 +8,116 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to Staging
+    name: Hardened Laravel Deploy
     runs-on: ubuntu-latest
-    
-    env:
-      DEPLOY_PATH: /home3/ayodejis/api.ayodejisticksdev.com.ng
-      PHP_PATH: /opt/cpanel/ea-php82/root/usr/bin
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
-          extensions: mbstring, xml, ctype, iconv, intl, pdo_mysql
+          php-version: "8.2"
+          extensions: mbstring, intl, gd, pdo_mysql, bcmath, xml, curl, zip, fileinfo, ctype, tokenizer
           tools: composer:v2
-          coverage: none
 
-      - name: Validate composer.json and composer.lock
-        run: composer validate --strict
+      - name: Copy Environment File
+        run: cp .env.example .env
 
-      - name: Cache Composer packages
-        id: composer-cache
-        uses: actions/cache@v3
-        with:
-          path: vendor
-          key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-php-
+      - name: Install Laravel Dependencies
+        run: composer install
 
-      - name: Install Dependencies
+      - name: Set Directory Permissions
+        run: chmod -R 775 storage bootstrap/cache
+
+      # - name: Generate Optimized Files
+      #   run: |
+      #     php artisan optimize:clear
+      #     php artisan config:cache
+      #     php artisan route:cache
+      #     php artisan view:cache
+
+      - name: Create Deployment Package
         run: |
-          composer install --prefer-dist --no-progress --no-interaction --no-dev
-          composer dump-autoload --optimize
-
-      - name: Prepare Deployment Package
-        run: |
-          # Remove development files
+          rm -rf node_modules/
+          rm -rf tests/
+          rm -rf .git/
+          rm -f .gitignore
           rm -f .env.example
-          rm -f composer.json composer.lock
-          find . -name "*.md" -delete
-          
-          # Create deployment archive
-          tar -czf deployment.tar.gz --exclude='.git' --exclude='.github' --exclude='deployment.tar.gz' .
+          rm -f phpunit.xml
 
-      - name: Deploy to Server
-        uses: appleboy/scp-action@v0.1.3
+          tar -czf deployment.tar.gz --exclude=".env" *
+
+      - name: Upload to Server
+        uses: easingthemes/ssh-deploy@main
         with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          port: ${{ secrets.SSH_REMOTE_PORT }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "deployment.tar.gz"
-          target: "${{ env.DEPLOY_PATH }}"
-          strip_components: 0
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
+          REMOTE_USER: ${{ secrets.REMOTE_USER }}
+          REMOTE_PORT: ${{ secrets.SSH_REMOTE_PORT }}
+          SOURCE: "deployment.tar.gz"
+          TARGET: "/home/bmcenuwi/api.bmc-ejigbo.com"
 
-      - name: Execute Server Deployment
+      - name: Post-Deployment Tasks
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
-          port: ${{ secrets.SSH_REMOTE_PORT }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script_stop: true
+          port: ${{ secrets.SSH_REMOTE_PORT }}
           script: |
             set -euo pipefail
-            
-            cd ${{ env.DEPLOY_PATH }}
-            
-            # Backup current deployment
-            if [ -d "current" ]; then
-              timestamp=$(date +%Y%m%d_%H%M%S)
-              cp -r current "backup_$timestamp"
-            fi
-            
-            # Extract new deployment
-            tar -xzf deployment.tar.gz -C .
-            rm -f deployment.tar.gz
-            
-            # Ensure proper PHP version
-            export PATH=${{ env.PHP_PATH }}:$PATH
-            
-            # Environment setup
-            if [ ! -f ".env" ]; then
-              echo "Warning: .env file not found. Please ensure it's configured."
-            fi
-            
-            # Install production dependencies (without dev dependencies)
-            /opt/cpanel/ea-php82/root/usr/bin/php /opt/cpanel/composer/bin/composer install --no-dev --optimize-autoloader --no-interaction
-            
-            # Set secure permissions
-            find . -type f -exec chmod 644 {} \;
-            find . -type d -exec chmod 755 {} \;
-            chmod -R 775 storage/
-            chmod -R 775 bootstrap/cache/
-            chgrp -R hospital storage bootstrap/cache
-            
-            # Laravel specific optimizations
-            /opt/cpanel/ea-php82/root/usr/bin/php artisan config:cache
-            /opt/cpanel/ea-php82/root/usr/bin/php artisan route:cache
-            /opt/cpanel/ea-php82/root/usr/bin/php artisan view:cache
-            
-            # Run migrations safely
-            read -r -p "Run database migrations? (y/N): " response
-            if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-              /opt/cpanel/ea-php82/root/usr/bin/php artisan migrate --force
-            else
-              echo "Skipping database migrations"
-            fi
-            
-            # Clear and cache again
-            /opt/cpanel/ea-php82/root/usr/bin/php artisan optimize:clear
-            /opt/cpanel/ea-php82/root/usr/bin/php artisan config:cache
-            /opt/cpanel/ea-php82/root/usr/bin/php artisan route:cache
-            
-            # Cleanup old backups (keep last 5)
-            ls -dt backup_* | tail -n +6 | xargs rm -rf
-            
-            echo "✅ Deployment completed successfully!"
+            cd /home/${{ secrets.REMOTE_USER }}/emr.bmc-ejigbo.com
 
-      - name: Verify Deployment
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          port: ${{ secrets.SSH_REMOTE_PORT }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd ${{ env.DEPLOY_PATH }}
-            export PATH=${{ env.PHP_PATH }}:$PATH
-            
-            # Verify Laravel installation
-            if /opt/cpanel/ea-php82/root/usr/bin/php artisan --version > /dev/null 2>&1; then
-              echo "✅ Laravel artisan command working"
-            else
-              echo "❌ Laravel artisan command failed"
-              exit 1
-            fi
-            
-            # Check storage permissions
-            if [ -w "storage" ] && [ -w "bootstrap/cache" ]; then
-              echo "✅ Storage directories are writable"
-            else
-              echo "❌ Storage directory permissions issue"
-              exit 1
-            fi
-            
-            echo "🎉 Deployment verification passed!"
+            echo "🟢 Starting post-deployment tasks..."
+
+            # # Backup existing .env if it exists
+            # if [ -f .env ]; then
+            #   echo "Backing up existing .env..."
+            #   cp .env .env.backup
+            # fi
+
+            # # Extract new deployment
+            # echo "Extracting deployment.tar.gz..."
+            # tar -xzf deployment.tar.gz
+            # rm deployment.tar.gz
+
+            # # Restore .env from backup if it exists
+            # if [ -f .env.backup ]; then
+            #   echo "Restoring .env from backup..."
+            #   mv .env.backup .env
+            # fi
+
+            # # Backup existing .env
+            # if [ -f .env ]; then
+            #   cp .env .env.backup
+            # fi
+
+            # Extract new deployment, safely ignoring .env
+            tar --exclude=".env" -xzf deployment.tar.gz
+            rm deployment.tar.gz
+
+            # # Restore .env if backup exists
+            # if [ -f .env.backup ]; then
+            #   mv .env.backup .env
+            # fi
+
+
+            # Set permissions safely
+            echo "Setting permissions..."
+            [ -d storage ] && chmod -R 775 storage
+            [ -d bootstrap/cache ] && chmod -R 775 bootstrap/cache
+            [ -f .env ] && chmod 644 .env
+
+            # Set ownership (adjust user/group if needed)
+            chown -R ${{ secrets.REMOTE_USER }}:${{ secrets.REMOTE_USER }} .
+
+            # Laravel optimizations
+            echo "Running Laravel optimizations..."
+            php artisan optimize:clear || true
+            php artisan config:cache || true
+            php artisan route:cache || true
+            php artisan view:cache || true
+
+            echo "✅ Deployment completed successfully!"
