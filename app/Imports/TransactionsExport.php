@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Exports;
+namespace App\Imports;
 
 use App\Models\Payment;
 use Maatwebsite\Excel\Concerns\FromView;

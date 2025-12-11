@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Enums\PaymentStatus;
-use App\Exports\TransactionsExport;
 use App\Http\Requests\CreatePaymentRequest;
+use App\Imports\TransactionsExport as ImportsTransactionsExport;
 use App\Models\Admission;
 use App\Models\AnteNatal;
 use App\Models\LabRequest;
@@ -29,7 +29,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
-use Maatwebsite\Excel\Excel;
+use Maatwebsite\Excel\Facades\Excel;
 use RuntimeException;
 
 class PaymentController extends Controller
@@ -1480,7 +1480,7 @@ class PaymentController extends Controller
                 'name' => Auth::user()->name
             ];
 
-            return Excel::download(new TransactionsExport($from, $to, $account), 'transactions-report.xlsx');
+            return Excel::download(new ImportsTransactionsExport($from, $to, $account), 'transactions-report.xlsx');
         } catch (Exception $e) {
             Log::error('Transaction export failed: ' . $e->getMessage());
 
