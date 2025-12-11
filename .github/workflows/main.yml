@@ -26,16 +26,17 @@ jobs:
         run: cp .env.example .env
 
       - name: Install Laravel Dependencies
-        run: composer install --no-dev --optimize-autoloader --no-interaction
+        run: composer install
 
       - name: Set Directory Permissions
         run: chmod -R 775 storage bootstrap/cache
 
-      - name: Generate Optimized Files
-        run: |
-          php artisan config:cache
-          php artisan route:cache
-          php artisan view:cache
+      # - name: Generate Optimized Files
+      #   run: |
+      #     php artisan optimize:clear
+      #     php artisan config:cache
+      #     php artisan route:cache
+      #     php artisan view:cache
 
       - name: Create Deployment Package
         run: |
