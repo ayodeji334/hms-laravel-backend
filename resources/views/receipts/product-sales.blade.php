@@ -38,9 +38,9 @@
 
 <div class="receipt-container">
     <div class="header">
-        <h2>Bowen University Hospital</h2>
-        <p>44432 Roscoe Shoal Apt. 471, South Viola, NE 26253-1296</p>
-        <p>Email: fsmith@example.com | Emergency: 08056816916</p>
+        <h2>Baptist Hospital, Ejigbo</h2>
+        <p>Ejigbo, Osun State, Nigeria</p>
+        {{-- <p>Email: fsmith@example.com | Emergency: 08056816916</p> --}}
     </div>
 
     <h3>Pharmacy Sales Receipt</h3>
