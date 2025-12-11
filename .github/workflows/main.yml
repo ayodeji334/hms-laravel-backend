@@ -40,11 +40,11 @@ jobs:
       - name: Create Deployment Package
         run: |
           rm -rf node_modules/
-          # rm -rf tests/
-          # rm -rf .git/
-          # rm -f .gitignore
-          # rm -f .env.example
-          # rm -f phpunit.xml
+          rm -rf tests/
+          rm -rf .git/
+          rm -f .gitignore
+          rm -f .env.example
+          rm -f phpunit.xml
 
           tar -czf deployment.tar.gz --exclude=".env" *
 
