@@ -25,7 +25,7 @@ class UserController extends Controller
             'email' => 'required|email|unique:users,email',
             'nationality' => 'required|string|max:255',
             'phone_number' => 'required|string|unique:users,phone_number',
-            'branch_id' => 'required|exists:branches,id',
+            // 'branch_id' => 'required|exists:branches,id',
             'user_type' => 'required|in:NURSE,PHARMACIST,DOCTOR,LAB-TECHNOLOGIST,RECORD-KEEPER,CASHIER,RADIOLOGIST',
         ]);
 
