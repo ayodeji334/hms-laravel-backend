@@ -57,6 +57,14 @@ class AnteNatal extends Model
         'added_by_id'
     ];
 
+    protected $casts = [
+        'has_heart_disease'      => 'boolean',
+        'has_chest_disease'      => 'boolean',
+        'has_leprosy_disease'    => 'boolean',
+        'has_undergo_operations' => 'boolean',
+        'has_kidney_disease'     => 'boolean',
+    ];
+
     public function patient()
     {
         return $this->belongsTo(Patient::class);

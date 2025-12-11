@@ -55,7 +55,7 @@ class AnteNatalController extends Controller
             $staff = Auth::user();
 
             // Check if there is already an active antenatal record for this patient
-            $existingAnteNatal = AnteNatal::where('status', 'NOT-DELIVERED')
+            $existingAnteNatal = AnteNatal::where('status', 'NOT_DELIVERED')
                 ->where('patient_id', $createAnteNatalDto['patient_id'])
                 ->first();
 
@@ -161,15 +161,17 @@ class AnteNatalController extends Controller
         }
     }
 
+    private function boolValue($value)
+    {
+        return in_array(strtolower($value), ['yes', 'true', '1']) ? true : false;
+    }
+
     public function update(string $id, Request $request)
     {
         try {
             $staff = Auth::user();
 
-            $anteNatalRecord = AnteNatal::with([
-                'previousPregnancies',
-                'patient'
-            ])->find($id);
+            $anteNatalRecord = AnteNatal::with(['previousPregnancies', 'patient'])->find($id);
 
             if (!$anteNatalRecord) {
                 return response()->json([
@@ -180,77 +182,104 @@ class AnteNatalController extends Controller
             }
 
             $previousPregnanciesData = $request->input('previous_pregnancies', []);
+            $primary = $request->input('primary_assessment', []);
 
-            DB::transaction(function () use ($anteNatalRecord, $previousPregnanciesData, $staff, $request) {
-                // Soft delete old pregnancy summaries
-                foreach ($anteNatalRecord->previousPregnancies as $record) {
-                    $record->delete();
-                }
+            DB::transaction(function () use ($anteNatalRecord, $previousPregnanciesData, $primary, $staff, $request) {
 
-                // $newPregnancySummaries = [];
+                /** --------------------------------------------
+                 * Delete old pregnancy summaries
+                 * --------------------------------------------
+                 */
+                $anteNatalRecord->previousPregnancies()->delete();
 
+                /** --------------------------------------------
+                 * Insert updated pregnancy summaries
+                 * --------------------------------------------
+                 */
                 foreach ($previousPregnanciesData as $item) {
-                    $summary = new PreviousPregnanciesSummary();
-                    $summary->cause_of_death = $item['is_child_still_alive'] ? null : $item['cause_of_death'];
-                    $summary->child_age_before_death = $item['is_child_still_alive'] ? null : $item['child_age_before_death'];
-                    $summary->child_gender = $item['child_gender'];
-                    $summary->child_weight = (string) $item['child_weight'];
-                    $summary->complication_during_labour = $item['complication_during_labour'];
-                    $summary->complication_during_pregnancy = $item['complication_during_pregnancy'];
-                    $summary->date_of_birth = $item['date_of_birth'];
-                    $summary->duration_of_pregnancy = $item['duration_of_pregnancy'];
-                    $summary->pueperium = $item['pueperium'];
-                    $summary->is_child_still_alive = $item['is_child_still_alive'];
-                    $summary->added_by_id = $staff->id;
-                    $summary->last_updated_by_id = $staff->id;
-                    $summary->ante_natal_id = $anteNatalRecord->id;
-                    $summary->save();
+                    $isAlive = $this->boolValue($item['is_child_still_alive']);
+
+                    PreviousPregnanciesSummary::create([
+                        'cause_of_death'             => $isAlive ? null : ($item['cause_of_death'] ?? null),
+                        'child_age_before_death'     => $isAlive ? null : ($item['child_age_before_death'] ?? null),
+                        'child_gender'               => $item['child_gender'] ?? null,
+                        'child_weight'               => (string) ($item['child_weight'] ?? null),
+                        'complication_during_labour' => $item['complication_during_labour'] ?? null,
+                        'complication_during_pregnancy' => $item['complication_during_pregnancy'] ?? null,
+                        'date_of_birth'              => $item['date_of_birth'] ?? null,
+                        'duration_of_pregnancy'      => $item['duration_of_pregnancy'] ?? null,
+                        'pueperium'                  => $item['pueperium'] ?? null,
+                        'is_child_still_alive'       => $isAlive,
+                        'added_by_id'                => $staff->id,
+                        'last_updated_by_id'         => $staff->id,
+                        'ante_natal_id'              => $anteNatalRecord->id,
+                    ]);
                 }
 
-                // Update AnteNatal record
-                $anteNatalRecord->fill([
-                    'expected_date_delivery' => $request->expected_date_delivery,
-                    'last_menstrual_period' => $request->last_menstrual_period,
-                    'total_number_of_children_alive' => $request->total_number_of_children_alive,
-                    'total_number_of_children' => $request->total_number_of_children,
-                    'has_chest_disease' => $request->has_chest_disease,
-                    'has_heart_disease' => $request->has_heart_disease,
-                    'has_kidney_disease' => $request->has_kidney_disease,
-                    'has_leprosy_disease' => $request->has_leprosy_disease,
-                    'has_undergo_operations' => $request->has_undergo_operations,
-                    'last_updated_by_id' => $staff->id,
-                ]);
 
-                $primary = $request->input('primary_assessment', []);
+                /** --------------------------------------------
+                 * Boolean fields conversion
+                 * --------------------------------------------
+                 */
+                $booleanFields = [
+                    'has_chest_disease',
+                    'has_heart_disease',
+                    'has_kidney_disease',
+                    'has_leprosy_disease',
+                    'has_undergo_operations',
+                    'has_undergo_operations',
+                ];
+
+                $convertedBooleans = [];
+                foreach ($booleanFields as $field) {
+                    $convertedBooleans[$field] = $this->boolValue($request->input($field));
+                }
+
+                /** --------------------------------------------
+                 * Update AnteNatal main record
+                 * --------------------------------------------
+                 */
+                $anteNatalRecord->fill(array_merge([
+                    'expected_date_delivery'       => $request->input('expected_date_delivery'),
+                    'last_menstrual_period'        => $request->input('last_menstrual_period'),
+                    'total_number_of_children_alive' => $request->input('total_number_of_children_alive'),
+                    'total_number_of_children'     => $request->input('total_number_of_children'),
+                    'last_updated_by_id'           => $staff->id,
+                ], $convertedBooleans));
+
+                /** --------------------------------------------
+                 * Update primary assessment
+                 * --------------------------------------------
+                 */
                 $anteNatalRecord->fill([
-                    'ankles_swelling' => $primary['ankles_swelling'] ?? null,
-                    'vdrl' => $primary['vdrl'] ?? null,
-                    'rh' => $primary['rh'] ?? null,
-                    'pcv' => $primary['pcv'] ?? null,
-                    'abdomen' => $primary['abdomen'] ?? null,
-                    'urine_albumin' => $primary['urine_albumin'] ?? null,
-                    'urine_sugar' => $primary['urine_sugar'] ?? null,
-                    'bleeding' => $primary['bleeding'] ?? null,
-                    'breast_and_nipples' => $primary['breast_and_nipples'] ?? null,
-                    'cardiovascular_system' => $primary['cardiovascular_system'] ?? null,
-                    'discharge' => $primary['discharge'] ?? null,
-                    'oedema' => $primary['oedema'] ?? null,
-                    'blood_group' => $primary['blood_group'] ?? null,
-                    'blood_pressure' => $primary['blood_pressure'] ?? null,
-                    'general_condition' => $primary['general_condition'] ?? null,
-                    'genotype' => $primary['genotype'] ?? null,
-                    'anaemia' => $primary['anaemia'] ?? null,
-                    'height' => $primary['height'] ?? null,
-                    'pregnancy_history' => $primary['pregnancy_history'] ?? null,
-                    'liver' => $primary['liver'] ?? null,
-                    'other_abnormalities' => $primary['other_abnormalities'] ?? null,
-                    'other_symptoms' => $primary['other_symptoms'] ?? null,
+                    'ankles_swelling'             => $primary['ankles_swelling'] ?? null,
+                    'vdrl'                        => $primary['vdrl'] ?? null,
+                    'rh'                          => $primary['rh'] ?? null,
+                    'pcv'                         => $primary['pcv'] ?? null,
+                    'abdomen'                     => $primary['abdomen'] ?? null,
+                    'urine_albumin'               => $primary['urine_albumin'] ?? null,
+                    'urine_sugar'                 => $primary['urine_sugar'] ?? null,
+                    'bleeding'                    => $primary['bleeding'] ?? null,
+                    'breast_and_nipples'          => $primary['breast_and_nipples'] ?? null,
+                    'cardiovascular_system'       => $primary['cardiovascular_system'] ?? null,
+                    'discharge'                   => $primary['discharge'] ?? null,
+                    'oedema'                      => $primary['oedema'] ?? null,
+                    'blood_group'                 => $primary['blood_group'] ?? null,
+                    'blood_pressure'              => $primary['blood_pressure'] ?? null,
+                    'general_condition'           => $primary['general_condition'] ?? null,
+                    'genotype'                    => $primary['genotype'] ?? null,
+                    'anaemia'                     => $primary['anaemia'] ?? null,
+                    'height'                      => $primary['height'] ?? null,
+                    'pregnancy_history'           => $primary['pregnancy_history'] ?? null,
+                    'liver'                       => $primary['liver'] ?? null,
+                    'other_abnormalities'         => $primary['other_abnormalities'] ?? null,
+                    'other_symptoms'              => $primary['other_symptoms'] ?? null,
                     'preliminary_pelvic_assessment' => $primary['preliminary_pelvic_assessment'] ?? null,
-                    'respiratory_system' => $primary['respiratory_system'] ?? null,
-                    'spleen' => $primary['spleen'] ?? null,
-                    'urinary_symptoms' => $primary['urinary_symptoms'] ?? null,
-                    'vomitting' => $primary['vomitting'] ?? null,
-                    'weight' => $primary['weight'] ?? null,
+                    'respiratory_system'          => $primary['respiratory_system'] ?? null,
+                    'spleen'                      => $primary['spleen'] ?? null,
+                    'urinary_symptoms'            => $primary['urinary_symptoms'] ?? null,
+                    'vomitting'                   => $primary['vomitting'] ?? null,
+                    'weight'                      => $primary['weight'] ?? null,
                 ]);
 
                 $anteNatalRecord->save();
@@ -271,6 +300,118 @@ class AnteNatalController extends Controller
             ], 500);
         }
     }
+
+
+    // public function update(string $id, Request $request)
+    // {
+    //     try {
+    //         $staff = Auth::user();
+
+    //         $anteNatalRecord = AnteNatal::with([
+    //             'previousPregnancies',
+    //             'patient'
+    //         ])->find($id);
+
+    //         if (!$anteNatalRecord) {
+    //             return response()->json([
+    //                 'message' => 'Ante-Natal Record not found',
+    //                 'status' => 'error',
+    //                 'success' => false,
+    //             ], 400);
+    //         }
+
+    //         $previousPregnanciesData = $request->input('previous_pregnancies', []);
+
+    //         DB::transaction(function () use ($anteNatalRecord, $previousPregnanciesData, $staff, $request) {
+    //             // Soft delete old pregnancy summaries
+    //             foreach ($anteNatalRecord->previousPregnancies as $record) {
+    //                 $record->delete();
+    //             }
+
+    //             // $newPregnancySummaries = [];
+
+    //             foreach ($previousPregnanciesData as $item) {
+    //                 $summary = new PreviousPregnanciesSummary();
+    //                 $summary->cause_of_death = $item['is_child_still_alive'] ? null : $item['cause_of_death'];
+    //                 $summary->child_age_before_death = $item['is_child_still_alive'] ? null : $item['child_age_before_death'];
+    //                 $summary->child_gender = $item['child_gender'];
+    //                 $summary->child_weight = (string) $item['child_weight'];
+    //                 $summary->complication_during_labour = $item['complication_during_labour'];
+    //                 $summary->complication_during_pregnancy = $item['complication_during_pregnancy'];
+    //                 $summary->date_of_birth = $item['date_of_birth'];
+    //                 $summary->duration_of_pregnancy = $item['duration_of_pregnancy'];
+    //                 $summary->pueperium = $item['pueperium'];
+    //                 $summary->is_child_still_alive = $item['is_child_still_alive'];
+    //                 $summary->added_by_id = $staff->id;
+    //                 $summary->last_updated_by_id = $staff->id;
+    //                 $summary->ante_natal_id = $anteNatalRecord->id;
+    //                 $summary->save();
+    //             }
+
+    //             // Update AnteNatal record
+    //             $anteNatalRecord->fill([
+    //                 'expected_date_delivery' => $request->expected_date_delivery,
+    //                 'last_menstrual_period' => $request->last_menstrual_period,
+    //                 'total_number_of_children_alive' => $request->total_number_of_children_alive,
+    //                 'total_number_of_children' => $request->total_number_of_children,
+    //                 'has_chest_disease'      => $this->boolValue($request->has_chest_disease),
+    //                 'has_heart_disease'      => $this->boolValue($request->has_heart_disease),
+    //                 'has_kidney_disease'     => $this->boolValue($request->has_kidney_disease),
+    //                 'has_leprosy_disease'    => $this->boolValue($request->has_leprosy_disease),
+    //                 'has_undergo_operations' => $this->boolValue($request->has_undergo_operations),
+    //                 'last_updated_by_id' => $staff->id,
+    //             ]);
+
+    //             $primary = $request->input('primary_assessment', []);
+    //             $anteNatalRecord->fill([
+    //                 'ankles_swelling' => $primary['ankles_swelling'] ?? null,
+    //                 'vdrl' => $primary['vdrl'] ?? null,
+    //                 'rh' => $primary['rh'] ?? null,
+    //                 'pcv' => $primary['pcv'] ?? null,
+    //                 'abdomen' => $primary['abdomen'] ?? null,
+    //                 'urine_albumin' => $primary['urine_albumin'] ?? null,
+    //                 'urine_sugar' => $primary['urine_sugar'] ?? null,
+    //                 'bleeding' => $primary['bleeding'] ?? null,
+    //                 'breast_and_nipples' => $primary['breast_and_nipples'] ?? null,
+    //                 'cardiovascular_system' => $primary['cardiovascular_system'] ?? null,
+    //                 'discharge' => $primary['discharge'] ?? null,
+    //                 'oedema' => $primary['oedema'] ?? null,
+    //                 'blood_group' => $primary['blood_group'] ?? null,
+    //                 'blood_pressure' => $primary['blood_pressure'] ?? null,
+    //                 'general_condition' => $primary['general_condition'] ?? null,
+    //                 'genotype' => $primary['genotype'] ?? null,
+    //                 'anaemia' => $primary['anaemia'] ?? null,
+    //                 'height' => $primary['height'] ?? null,
+    //                 'pregnancy_history' => $primary['pregnancy_history'] ?? null,
+    //                 'liver' => $primary['liver'] ?? null,
+    //                 'other_abnormalities' => $primary['other_abnormalities'] ?? null,
+    //                 'other_symptoms' => $primary['other_symptoms'] ?? null,
+    //                 'preliminary_pelvic_assessment' => $primary['preliminary_pelvic_assessment'] ?? null,
+    //                 'respiratory_system' => $primary['respiratory_system'] ?? null,
+    //                 'spleen' => $primary['spleen'] ?? null,
+    //                 'urinary_symptoms' => $primary['urinary_symptoms'] ?? null,
+    //                 'vomitting' => $primary['vomitting'] ?? null,
+    //                 'weight' => $primary['weight'] ?? null,
+    //             ]);
+
+    //             $anteNatalRecord->save();
+    //         });
+
+    //         return response()->json([
+    //             'message' => 'Ante-natal record updated successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //         ], 200);
+    //     } catch (Exception $e) {
+    //         Log::info($e);
+
+    //         return response()->json([
+    //             'message' => $e->getMessage() ?? 'Something went wrong. Try again',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
 
     public function findAll(Request $request)
     {
