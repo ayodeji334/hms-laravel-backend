@@ -121,6 +121,8 @@
 #             php artisan view:cache || true
 
 #             echo "✅ Deployment completed successfully!"
+
+
 name: Deploy to staging server
 
 on:
