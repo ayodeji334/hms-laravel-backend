@@ -30,19 +30,19 @@ jobs:
       - name: Upload to server
         uses: easingthemes/ssh-deploy@main
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
-          REMOTE_USER: ${{ secrets.REMOTE_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SAKI_SSH_PRIVATE_KEY }}
+          REMOTE_HOST: ${{ secrets.SAKI_REMOTE_HOST }}
+          REMOTE_USER: ${{ secrets.SAKI_REMOTE_USER }}
           TARGET: /home/bmcsalnj/api.bmcsaki.org
-          REMOTE_PORT: ${{ secrets.SSH_REMOTE_PORT }}
+          REMOTE_PORT: ${{ secrets.SAKI_SSH_REMOTE_PORT }}
       
       - name: Post install
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.REMOTE_HOST }}
-          username: ${{ secrets.REMOTE_USER }}
-          port: ${{ secrets.SSH_REMOTE_PORT }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          host: ${{ secrets.SAKI_REMOTE_HOST }}
+          username: ${{ secrets.SAKI_REMOTE_USER }}
+          port: ${{ secrets.SAKI_SSH_REMOTE_PORT }}
+          key: ${{ secrets.SAKI_SSH_PRIVATE_KEY }}
           script: |
             cd /home/bmcsalnj/api.bmcsaki.org
             export PATH=/opt/cpanel/ea-php82/root/usr/bin/:$PATH
