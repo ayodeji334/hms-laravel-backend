@@ -128,7 +128,7 @@ name: Deploy to staging server
 on:
   push:
     branches:
-      - main
+      - ejigbo
       
   workflow_dispatch:
 
