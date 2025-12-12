@@ -3,7 +3,7 @@ name: Deploy to staging server
 on:
   push:
     branches:
-      - ejigbo
+      - main
       
   workflow_dispatch:
 
