@@ -261,7 +261,7 @@ class UserController extends Controller
                 Rule::unique('users', 'phone_number')->ignore($id),
             ],
             'branch_id' => 'required|exists:branches,id',
-            'user_type' => 'required|in:NURSE,PHARMACIST,DOCTOR,LAB-TECHNOLOGIST,RECORD-KEEPER,CASHIER,RADIOLOGIST',
+            'user_type' => 'required|in:NURSE,PHARMACIST,DOCTOR,LAB-TECHNOLOGIST,RECORD-KEEPER,CASHIER,RADIOLOGIST,ADMIN',
         ]);
 
         try {
