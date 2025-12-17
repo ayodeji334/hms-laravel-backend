@@ -78,7 +78,8 @@
     <div class="dashed-line"></div>
 
     <table class="info-table">
-        <tr><td class="bold">Receipt:</td><td class="text-right">{{ $invoice_id }}</td></tr>
+        <tr><td class="bold">Receipt Ref:</td><td class="text-right">{{ $invoice_id }}</td></tr>
+        <tr><td class="bold">Transaction Ref:</td><td class="text-right">{{ $payment['transaction_reference'] }}</td></tr>
         <tr><td class="bold">Date:</td><td class="text-right">{{ \Carbon\Carbon::parse($created_at)->format('d/m/y H:i') }}</td></tr>
         <tr><td class="bold">Client:</td><td class="text-right">{{ $customer_name }}</td></tr>
     </table>
@@ -121,9 +122,6 @@
             <tr>
                 <td>Paid Via ({{ $payment['payment_method'] }}):</td>
                 <td class="text-right">N{{ number_format($payment['amount'], 2) }}</td>
-            </tr>
-            <tr>
-                <td colspan="2" style="font-size: 8px;">Ref: {{ $payment['transaction_reference'] }}</td>
             </tr>
         @endif
     </table>
