@@ -187,14 +187,13 @@ class ProductSalesController extends Controller
 
     public function downloadReceipt($id)
     {
-        Log::info($id);
         try {
             $ProductSales = ProductSales::with([
                 'soldBy',
                 'patient',
                 'salesItems.product',
                 'payment.confirmedBy.assignedBranch'
-            ])->find($id)->first();
+            ])->find($id);
 
             Log::info($ProductSales);
 
