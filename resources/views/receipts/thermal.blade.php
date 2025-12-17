@@ -65,9 +65,9 @@
 </head>
 <body>
     <div class="header text-center">
-        <div class="logo-container">
+        {{-- <div class="logo-container">
             <img src="https://emr.bmcsaki.org/assets/logo-D6XpxHrV.png" alt="Hospital Logo">
-        </div>
+        </div> --}}
         <h2>Baptist Medical Center, Saki</h2>
         <p>No. 1, Dr. V. O. Fatunla Street</p>
         <p>Ajegunle, Saki West LGA, Oyo State</p>
