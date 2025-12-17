@@ -4,133 +4,148 @@
     <meta charset="utf-8">
     <title>Payment Receipt</title>
     <style>
+        @page { margin: 0; }
         body {
-           font-family: monospace, sans-serif;
+            font-family: "Courier New", Courier, monospace;
             font-size: 10px;
-            margin: 0;
-            padding: 0;
-            width: 100%;
-        }
-        .receipt {
-            width: 100%;
-            padding: 5px;
+            line-height: 1.3;
+            width: 58mm;
             margin: 0 auto;
+            padding: 5px;
+            color: #000;
         }
-        .header, .footer {
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        .bold { font-weight: bold; }
+        
+        /* Logo Styling */
+        .logo-container {
             text-align: center;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
         }
-        .header h3, .header h4 {
-            margin: 3px 0;
+        .logo-container img {
+            max-width: 35mm;
+            height: auto;
+            filter: grayscale(100%); /* Best for thermal printers */
         }
-        .header h6 {
-            margin: 2px 0;
-            font-size: 10px;
-            font-weight: normal;
+
+        .header h2 { font-size: 11px; margin: 2px 0; text-transform: uppercase; }
+        .header p { font-size: 8px; margin: 0; line-height: 1.1; }
+
+        .divider {
+            border-top: 1px dashed #000;
+            margin: 6px 0;
         }
-        .section {
-            margin-bottom: 8px;
-        }
-        .label {
+
+        .receipt-title {
+            font-size: 11px;
             font-weight: bold;
+            text-align: center;
+            margin: 5px 0;
+            text-decoration: underline;
         }
-        table {
+
+        .meta-table {
             width: 100%;
             border-collapse: collapse;
         }
-        .meta td {
-            padding: 3px 0;
+        .meta-table td {
+            padding: 2px 0;
             vertical-align: top;
+            font-size: 9px;
         }
-        .meta td:first-child {
-            width: 90%;
-        }
-        hr {
-            border: 0.5px dashed #ccc;
-            margin: 8px 0;
-        }
-        .divider {
-            margin: 10px 0;
-            border-top: 1px dashed #000;
-        }
-        .text-center {
-            text-align: center;
+        .label { width: 45%; font-weight: bold; }
+        .value { width: 55%; text-align: right; }
+
+        .footer {
+            margin-top: 10px;
+            font-size: 8px;
         }
     </style>
 </head>
 <body>
-<div class="receipt">
-    <div class="header">
-        <h3>Bowen University Teaching Hospital</h3>
-        <h6>No. 1, Beaside Baptist Theology Seminary College</h6>
-        <h6>Ogbomoso, Oyo State, Nigeria</h6>
-        <h6><strong>Email: contact@bowenhospital.org<strong></h6>
-        
-        <div class="divider"></div>
-        
-        <h4>Payment Receipt</h4>
-        <div><strong>Transaction Ref:</strong> {{ $payment['transaction_reference'] }}</div>
-        <div><strong>Date :</strong>  {{ \Illuminate\Support\Carbon::parse($payment['created_at'])->format('Y-m-d h:i A') }}</div>
-        
-        <div class="divider"></div>
-    </div>
-
-    <div class="section">
-        <table class="meta">
-            <tr>
-                <td class="label">Patient Name:</td>
-                <td>{{ $payment['patient']['name'] ?? $payment['customer_name'] ?? 'N/A' }}</td>
-            </tr>
-            <tr>
-                <td class="label">Patient Reg No:</td>
-                <td>{{ $payment['patient']['patient_reg_no'] ?? $payment['patient_reg_no'] ?? 'N/A' }}</td>
-            </tr>
-            <tr>
-                <td class="label">Payment Method:</td>
-                <td>{{ $payment['payment_method'] }}</td>
-            </tr>
-            <tr>
-                <td class="label">Type:</td>
-                <td>{{ $payment['type'] }}</td>
-            </tr>
-            <tr>
-                <td class="label">Amount Paid:</td>
-                <td>#{{ number_format($payment['amount'], 2) }}</td>
-            </tr>
-            <tr>
-                <td class="label">Amount Payable:</td>
-                <td>#{{ number_format($payment['amount_payable'], 2) }}</td>
-            </tr>
-            @if (!empty($payment['refund_amount']))
-                <tr>
-                    <td class="label">Refund:</td>
-                    <td>{{ "na" }}{{ number_format($payment['refund_amount'], 2) }}</td>
-                </tr>
-            @endif
-            @if (!empty($payment['status']))
-                <tr>
-                    <td class="label">Status:</td>
-                    <td>{{ $payment['status'] ?? 'N/A' }}</td>
-                </tr>
-            @endif
-        </table>
+    <div class="header text-center">
+        <div class="logo-container">
+            <img src="https://emr.bmcsaki.org/assets/logo-D6XpxHrV.png" alt="Hospital Logo">
+        </div>
+        <h2>Baptist Medical Center, Saki</h2>
+        <p>No. 1, Dr. V. O. Fatunla Street</p>
+        <p>Ajegunle, Saki West LGA, Oyo State</p>
     </div>
 
     <div class="divider"></div>
+    
+    <div class="receipt-title">PAYMENT RECEIPT</div>
 
-    <div class="section">
-        <div><span class="label">Processed By:</span> {{ $payment['added_by']['name'] ?? 'System' }}</div>
+    <table class="meta-table">
+        <tr>
+            <td class="label">Date:</td>
+            <td class="value">{{ \Illuminate\Support\Carbon::parse($payment['created_at'])->format('d/m/Y h:i A') }}</td>
+        </tr>
+        <tr>
+            <td class="label">Ref:</td>
+            <td class="value">{{ $payment['transaction_reference'] }}</td>
+        </tr>
+    </table>
+
+    <div class="divider"></div>
+
+    <table class="meta-table">
+        <tr>
+            <td class="label">Patient Name:</td>
+            <td class="value">{{ $payment['patient']['name'] ?? $payment['customer_name'] ?? 'N/A' }}</td>
+        </tr>
+        <tr>
+            <td class="label">Reg No:</td>
+            <td class="value">{{ $payment['patient']['patient_reg_no'] ?? $payment['patient_reg_no'] ?? 'N/A' }}</td>
+        </tr>
+        <tr>
+            <td class="label">Pay Method:</td>
+            <td class="value">{{ $payment['payment_method'] }}</td>
+        </tr>
+        <tr>
+            <td class="label">Service Type:</td>
+            <td class="value">{{ $payment['type'] }}</td>
+        </tr>
+    </table>
+
+    <div class="divider"></div>
+
+    <table class="meta-table">
+        <tr>
+            <td class="label">Payable:</td>
+            <td class="value">N{{ number_format($payment['amount_payable'], 2) }}</td>
+        </tr>
+        <tr style="font-size: 11px;">
+            <td class="label">AMOUNT PAID:</td>
+            <td class="value bold">N{{ number_format($payment['amount'], 2) }}</td>
+        </tr>
+        @if (!empty($payment['refund_amount']) && $payment['refund_amount'] > 0)
+            <tr>
+                <td class="label">Refunded:</td>
+                <td class="value">N{{ number_format($payment['refund_amount'], 2) }}</td>
+            </tr>
+        @endif
+        @if (!empty($payment['status']))
+            <tr>
+                <td class="label">Status:</td>
+                <td class="value bold">{{ strtoupper($payment['status']) }}</td>
+            </tr>
+        @endif
+    </table>
+
+    <div class="divider"></div>
+
+    <div class="section" style="font-size: 8px;">
+        <div><strong>Processed By:</strong> {{ $payment['added_by']['name'] ?? 'System' }}</div>
         @if (!empty($payment['confirmed_by']))
-            <div><span class="label">Confirmed By:</span> {{ $payment['confirmed_by']['name'] }}</div>
+            <div><strong>Confirmed By:</strong> {{ $payment['confirmed_by']['name'] }}</div>
         @endif
     </div>
 
-    <div class="divider"></div>
-
-    <div class="footer">
-        <p>Thank you for your payment</p>
-        <p><small>Bowen Hospital - {{ now()->year }}</small></p>
+    <div class="footer text-center">
+        <p class="bold">Thank you for your payment!</p>
+        <p>Baptist Medical Center, Saki - {{ date('Y') }}</p>
     </div>
-</div>
 </body>
 </html>
