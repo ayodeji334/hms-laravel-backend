@@ -194,9 +194,7 @@ class ProductSalesController extends Controller
                 'patient',
                 'salesItems.product',
                 'payment.confirmedBy.assignedBranch'
-            ])->find($id)->first();
-
-            Log::info($ProductSales);
+            ])->find($id);
 
             if (!$ProductSales) {
                 response()->json([
@@ -219,8 +217,6 @@ class ProductSalesController extends Controller
             if (!View::exists('receipts.product-sales')) {
                 throw new Exception("receipt not found");
             }
-
-            Log::info($ProductSales);
 
             $pdf = Pdf::loadView('receipts.product-sales', [
                 ...$ProductSales->toArray(),
