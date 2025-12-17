@@ -260,7 +260,7 @@ class UserController extends Controller
                 'string',
                 Rule::unique('users', 'phone_number')->ignore($id),
             ],
-            'branch_id' => 'required|exists:branches,id',
+            // 'branch_id' => 'required|exists:branches,id',
             'user_type' => 'required|in:NURSE,PHARMACIST,DOCTOR,LAB-TECHNOLOGIST,RECORD-KEEPER,CASHIER,RADIOLOGIST,ADMIN',
         ]);
 
@@ -286,7 +286,7 @@ class UserController extends Controller
             $staff->phone_number = $request->phone_number;
             $staff->gender = $request->gender;
             $staff->staff_number = $request->staff_number;
-            $staff->branch_id = $request->branch_id;
+            // $staff->branch_id = $request->branch_id;
             $staff->role = $request->user_type;
             $staff->save();
 
