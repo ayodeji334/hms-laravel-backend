@@ -80,7 +80,7 @@
     <table class="info-table">
         <tr><td class="bold">Receipt Ref:</td><td class="text-right">{{ $invoice_id }}</td></tr>
         <tr><td class="bold">Transaction Ref:</td><td class="text-right">{{ $payment['transaction_reference'] }}</td></tr>
-        <tr><td class="bold">Date:</td><td class="text-right">{{ \Carbon\Carbon::parse($created_at)->format('d/m/y H:i') }}</td></tr>
+        <tr><td class="bold">Date:</td><td class="text-right">{{ \Carbon\Carbon::parse($created_at)->format('d/m/y h:i:a') }}</td></tr>
         <tr><td class="bold">Client:</td><td class="text-right">{{ $customer_name }}</td></tr>
     </table>
 
