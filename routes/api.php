@@ -147,7 +147,7 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('{id}/overview', [OrganisationAndHmoController::class, 'getOverview']);
         Route::get('{id}/transactions', [OrganisationAndHmoController::class, 'getTransactions']);
         Route::get('{id}/payments', [OrganisationAndHmoController::class, 'getPayments']);
-        Route::get('/', [OrganisationAndHmoController::class, 'findAll'])->middleware('role:ADMIN,SUPER-ADMIN,CASHIER');
+        Route::get('/', [OrganisationAndHmoController::class, 'findAll']);
         Route::get('{id}', [OrganisationAndHmoController::class, 'findOne'])->middleware('role:ADMIN,SUPER-ADMIN,CASHIER');
         Route::post('/', [OrganisationAndHmoController::class, 'create'])->middleware('role:ADMIN,SUPER-ADMIN');
         Route::patch('{id}', [OrganisationAndHmoController::class, 'update'])->middleware('role:ADMIN,SUPER-ADMIN');
