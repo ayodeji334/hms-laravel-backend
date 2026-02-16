@@ -52,7 +52,7 @@
         .meta-table td {
             padding: 2px 0;
             vertical-align: top;
-            font-size: 9px;
+            font-size: 13px;
         }
         .label { width: 45%; font-weight: bold; }
         .value { width: 55%; text-align: right;  font-weight: bold;}
