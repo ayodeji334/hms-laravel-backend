@@ -55,7 +55,7 @@
             font-size: 9px;
         }
         .label { width: 45%; font-weight: bold; }
-        .value { width: 55%; text-align: right; }
+        .value { width: 55%; text-align: right;  font-weight: bold;}
 
         .footer {
             margin-top: 10px;
