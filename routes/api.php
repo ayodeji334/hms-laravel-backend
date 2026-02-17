@@ -331,7 +331,7 @@ Route::middleware("auth:sanctum")->group(function () {
         // Route::delete('{id}', [ServiceController::class, 'delete'])
     });
 
-    Route::prefix('service-categories')->middleware("role:SUPER-ADMIN,ADMIN")->group(function () {
+    Route::prefix('service-categories')->middleware("role:SUPER-ADMIN,ADMIN,CASHIER")->group(function () {
         Route::get('/', [ServiceCategoryController::class, 'findAll']);
         Route::get('/search', [ServiceCategoryController::class, 'getAllWithoutPagination']);
         Route::get('/', [ServiceCategoryController::class, 'findAll']);
