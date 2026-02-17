@@ -173,7 +173,7 @@ Route::middleware("auth:sanctum")->group(function () {
         // Route::delete('/hmo/{id}', [PaymentController::class, 'deleteHmoPayment']);
     });
 
-    Route::prefix('admissions')->middleware("role:SUPER-ADMIN,NURSE,DOCTOR")->middleware("role:ADMIN,SUPER-ADMIN,NURSE,DOCTOR")->group(function () {
+    Route::prefix('admissions')->middleware("role:SUPER-ADMIN,NURSE,DOCTOR,CASHIER")->middleware("role:ADMIN,SUPER-ADMIN,NURSE,DOCTOR,CASHIER")->group(function () {
         Route::get('/', [AdmissionController::class, 'findAll']);
         Route::get('{id}', [AdmissionController::class, 'findOne']);
         Route::get('{id}/discharge', [AdmissionController::class, 'discharge']);
