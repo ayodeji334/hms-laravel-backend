@@ -66,6 +66,7 @@ Route::middleware("auth:sanctum")->group(function () {
     });
 
     Route::prefix('visitations')->group(function () {
+        Route::get('{id}/lab-requests', [VisitationController::class, 'getVisitationTests']);
         Route::get('/', [VisitationController::class, 'findAll'])->middleware('role:SUPER-ADMIN,ADMIN,DOCTOR,NURSE');
         Route::get('/today', [VisitationController::class, 'findAllAppointmentsForToday'])->middleware('role:SUPER-ADMIN,ADMIN,DOCTOR,NURSE');
         Route::get('{id}', [VisitationController::class, 'findOne'])->middleware('role:SUPER-ADMIN,ADMIN,DOCTOR');

@@ -213,6 +213,37 @@ class VisitationController extends Controller
         }
     }
 
+    /** * Get all lab tests attached to a visitation (paginated). */
+    public function getVisitationTests(Request $request, $visitationId)
+    {
+        try {
+            $perPage = $request->get('per_page', 10); // default 10 per page
+
+            $visitation = Visitation::find($visitationId);
+
+            // Use the relationship and paginate
+            $tests = $visitation->recommendedTests()
+                ->with('service') // eager load service details
+                ->with([
+                    'addedBy',
+                    'testResult.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
+                    'testResult.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number'
+                ])
+                ->paginate($perPage);
+
+            return response()->json([
+                'success' => true,
+                'data' => $tests,
+            ], 200);
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'An error occurred while fetching visitation tests',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
     public function create(Request $request): JsonResponse
     {
         $validated = $request->validate(
