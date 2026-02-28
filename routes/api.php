@@ -314,8 +314,8 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::put('{id}/item', [PrescriptionController::class, 'updatePrescriptionItem'])->middleware("role:SUPER-ADMIN,DOCTOR");
         Route::post('{id}/dispense-items', [PrescriptionController::class, 'markItemsAsDispensed'])->middleware("role:PHARMACIST,SUPER-ADMIN");
         Route::post('{id}/items-not-available', [PrescriptionController::class, 'markItemsNotAvailable'])->middleware("role:PHARMACIST,PHARMACIST,SUPER-ADMIN");;
-        Route::post('{id}/remove-items', [PrescriptionController::class, 'removeItems'])->middleware("role:SUPER-ADMIN,DOCTOR");
-        Route::post('{id}/add-items', [PrescriptionController::class, 'addMoreItems'])->middleware("role:SUPER-ADMIN,DOCTOR");
+        Route::post('{id}/remove-items', [PrescriptionController::class, 'removeItems'])->middleware("role:SUPER-ADMIN,DOCTOR,NURSE");
+        Route::post('{id}/add-items', [PrescriptionController::class, 'addMoreItems'])->middleware("role:SUPER-ADMIN,DOCTOR,NURSE");
         Route::get('{id}/item/{status}', [PrescriptionController::class, 'updatePrescriptionItemStatus'])->middleware("role:SUPER-ADMIN,PHARMACIST");;
     });
 
