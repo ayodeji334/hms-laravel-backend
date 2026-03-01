@@ -12,6 +12,7 @@ use App\Models\RadiologyRequest;
 use App\Models\Service;
 use App\Models\Treatment;
 use App\Models\User;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Exception;
 use Illuminate\Http\Request;
@@ -640,13 +641,13 @@ class LabRequestController extends Controller
 
             Log::info(($testRequest->payment->id));
 
-            if (!$testRequest->payment || $testRequest->payment->status !== 'COMPLETED') {
-                return response()->json([
-                    'message' => 'Payment not found or not completed.',
-                    'success' => false,
-                    'status' => 'error',
-                ], 400);
-            }
+            // if (!$testRequest->payment || $testRequest->payment->status !== 'COMPLETED') {
+            //     return response()->json([
+            //         'message' => 'Payment not found or not completed.',
+            //         'success' => false,
+            //         'status' => 'error',
+            //     ], 400);
+            // }
 
             $examiner = User::find($request['result_carried_out_by']);
             if (!$examiner) {
@@ -1029,6 +1030,50 @@ class LabRequestController extends Controller
             ], 500);
         }
     }
+
+    public function downloadTestResult($id)
+    {
+        try {
+            $labRequest = LabRequest::with([
+                'patient',
+                'service',
+                'testResult.resultCarriedOutBy',
+            ])->find($id);
+
+            if (!$labRequest) {
+                return response()->json([
+                    'message' => 'Lab request not found.',
+                    'status' => 'error',
+                    'success' => false
+                ], 404);
+            }
+
+            if (!$labRequest->testResult) {
+                return response()->json([
+                    'message' => 'No test result available for this request.',
+                    'status' => 'error',
+                    'success' => false
+                ], 400);
+            }
+
+            Log::info($labRequest->testResult);
+
+            $pdf = Pdf::loadView('reports.test-report', [
+                'result' => $labRequest->testResult,
+            ]);
+
+            return $pdf->download('lab-test-result.pdf');
+        } catch (Exception $e) {
+            Log::error('Test result download error: ' . $e->getMessage());
+
+            return response()->json([
+                'message' => 'An error occurred while generating the test result.',
+                'status' => 'error',
+                'success' => false
+            ], 500);
+        }
+    }
+
 
     public function getReport()
     {
