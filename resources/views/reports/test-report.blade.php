@@ -5,10 +5,15 @@
     <title>Test Result</title>
     <style>
         body { font-family: DejaVu Sans, sans-serif; font-size: 12px; }
-        .header { text-align: center; border: 1px solid #1e3a8a; padding: 15px; }
+        .header { text-align: center; padding: 1px; }
         .section-title {
             background: #1e3a8a;
             color: white;
+            padding: 8px;
+            text-align: center;
+            font-weight: bold;
+        }
+         .section-title-2 {
             padding: 8px;
             text-align: center;
             font-weight: bold;
@@ -61,65 +66,69 @@
     </table>
 </div>
 
-{{-- TOP-LEVEL INPUT FIELDS --}}
-@if(!empty($result->result_details['input_fields']))
-<div class="mt-30">
-    <div class="section-title">General Result Summary</div>
-    <table>
-        @foreach($result->result_details['input_fields'] as $field)
-            <tr>
-                <td class="label">{{ $field['fieldName'] }}</td>
-                <td>{{ $field['value'] ?? 'N/A' }}</td>
-            </tr>
-        @endforeach
-    </table>
-</div>
-@endif
+<div class="mt-20">
+    <div class="section-title">Result Summary</div>
 
-{{-- CATEGORIES --}}
-@if(!empty($result->result_details['categories']))
-    @foreach($result->result_details['categories'] as $category)
-        <div class="mt-30">
-            <div class="section-title">{{ $category['name'] }}</div>
+    {{-- TOP-LEVEL INPUT FIELDS --}}
+    @if(!empty($result->result_details['input_fields']))
+    <div>
+        <div class="section-title-2">General Result</div>
+        <table>
+            @foreach($result->result_details['input_fields'] as $field)
+                <tr>
+                    <td class="label">{{ $field['fieldName'] }}</td>
+                    <td>{{ $field['value'] ?? 'N/A' }}</td>
+                </tr>
+            @endforeach
+        </table>
+    </div>
+    @endif
 
-            {{-- CATEGORY INPUT FIELDS --}}
-            @if(!empty($category['input_fields']))
-                <table style="margin-bottom:20px;">
-                    @foreach($category['input_fields'] as $field)
-                        <tr>
-                            <td class="label">{{ $field['fieldName'] }}</td>
-                            <td>{{ $field['value'] ?? 'N/A' }}</td>
-                        </tr>
-                    @endforeach
-                </table>
-            @endif
+    {{-- CATEGORIES --}}
+    @if(!empty($result->result_details['categories']))
+        @foreach($result->result_details['categories'] as $category)
+            <div class="mt-20">
+                <div class="section-title-2">{{ $category['name'] }}</div>
 
-            {{-- CATEGORY TABLES --}}
-            @if(!empty($category['tables']))
-                @foreach($category['tables'] as $table)
+                {{-- CATEGORY INPUT FIELDS --}}
+                @if(!empty($category['input_fields']))
                     <table style="margin-bottom:20px;">
-                        <thead>
+                        @foreach($category['input_fields'] as $field)
                             <tr>
-                                @foreach($table['columns'] as $column)
-                                    <th>{{ $column['header'] ?? 'Parameter' }}</th>
-                                @endforeach
+                                <td class="label">{{ $field['fieldName'] }}</td>
+                                <td>{{ $field['value'] ?? 'N/A' }}</td>
                             </tr>
-                        </thead>
-                        <tbody>
-                            @foreach($table['rows'] as $row)
+                        @endforeach
+                    </table>
+                @endif
+
+                {{-- CATEGORY TABLES --}}
+                @if(!empty($category['tables']))
+                    @foreach($category['tables'] as $table)
+                        <table style="margin-bottom:20px;">
+                            <thead>
                                 <tr>
-                                    @foreach($row['values'] as $value)
-                                        <td>{{ $value ?? '-' }}</td>
+                                    @foreach($table['columns'] as $column)
+                                        <th>{{ $column['header'] ?? 'Parameter' }}</th>
                                     @endforeach
                                 </tr>
-                            @endforeach
-                        </tbody>
-                    </table>
-                @endforeach
-            @endif
-        </div>
-    @endforeach
-@endif
+                            </thead>
+                            <tbody>
+                                @foreach($table['rows'] as $row)
+                                    <tr>
+                                        @foreach($row['values'] as $value)
+                                            <td>{{ $value ?? '-' }}</td>
+                                        @endforeach
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    @endforeach
+                @endif
+            </div>
+        @endforeach
+    @endif
+</div>
 
 {{-- FOOTER --}}
 <div class="mt-30">
