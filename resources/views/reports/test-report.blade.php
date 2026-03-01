@@ -30,7 +30,7 @@
 {{-- HEADER --}}
 <div class="header">
      <div class="header-content">
-               <div style="width: 240px; height: 40px; margin: auto;padding: 5px;overflow: hidden;">
+               <div style="width: 200px; height: 40px; margin: auto;padding: 5px;overflow: hidden;">
                 <img src="{{ public_path('images/logo.png') }}" alt="Laravel Logo" style="width: 100%; height: 100%;" />
             </div>
     <h2>BAPTIST MEDICAL CENTRE, SAKI</h2>
