@@ -963,7 +963,7 @@ class LabRequestController extends Controller
                 });
             }
 
-            $labRequests = $query->orderByDesc('updated_at')->paginate(4);
+            $labRequests = $query->orderByDesc('updated_at')->paginate(20);
 
             return response()->json([
                 'message' => 'Lab Request fetched successfully',

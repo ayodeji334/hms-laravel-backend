@@ -7,6 +7,7 @@ use App\Enums\TreatmentStatus;
 use App\Models\Admission;
 use App\Models\Note;
 use App\Models\Patient;
+use App\Models\Payment;
 use App\Models\Product;
 use App\Models\Service;
 use App\Models\Treatment;
@@ -17,6 +18,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Exception\BadRequestException;
 
 class TreatmentController extends Controller
@@ -78,11 +80,36 @@ class TreatmentController extends Controller
             $treatment->treatment_type = $validated['treatment_type'];
             $treatment->status = TreatmentStatus::IN_PROGRESS;
 
+            $payment = new Payment();
+            $payment->amount = number_format(1000, 2, '.', '');
+            $payment->amount_payable = number_format(1000, 2, '.', '');
+            $payment->transaction_reference = strtoupper(Str::random(10));
+            $payment->type = 'TREATMENT';
+            $payment->status = 'CREATED';
+            $payment->customer_name = $patient->full_name ?? $patient->name ?? null;
+            $payment->patient_id = $patient->id;
+            $payment->added_by_id = $staff->id;
+            $payment->last_updated_by_id = $staff->id;
+
+            // optional metadata/history
+            $payment->history = json_encode([
+                [
+                    'date' => now(),
+                    'title' => 'CREATED',
+                    'created_by' => "$staff->name ($staff->staff_number)",
+                    'amount' => $payment->amount_payable,
+                ]
+            ]);
+
             if ($admission) {
                 $treatment->admission()->associate($admission);
             }
 
             if ($visitation) {
+                $payment->payable_type = Visitation::class;
+                $payment->payable_id = $visitation->id;
+
+
                 $treatment->visitation()->associate($visitation);
             }
 
@@ -91,6 +118,9 @@ class TreatmentController extends Controller
             $treatment->treatedBy()->associate($staff);
             $treatment->lastUpdatedBy()->associate($staff);
             $treatment->save();
+
+            $payment->reference = 'TREATMENT-T' . $treatment->id;
+            $payment->save();
 
             return response()->json([
                 'message' => 'Treatment record added successfully',
@@ -107,6 +137,7 @@ class TreatmentController extends Controller
             ], 500);
         }
     }
+
     public function update(Request $request, $id)
     {
         $validated = $request->validate([
