@@ -1467,6 +1467,313 @@ class PaymentController extends Controller
         }
     }
 
+    public function bulkMarkAsPaid(Request $request)
+    {
+        $request->validate([
+            'ids'                => ['required', 'array', 'min:1', 'max:10'],
+            'ids.*'              => ['required', 'integer', 'exists:payments,id'],
+            'payment_method'     => ['required', Rule::in(['WALLET', 'TRANSFER', 'HMO', 'CASH'])],
+            'remark'             => ['nullable', 'string'],
+            'hmo_id'             => ['exclude_unless:payment_method,HMO', 'integer'],
+            'transfer_reference' => [
+                'exclude_unless:payment_method,TRANSFER',
+                'unique:payments,transaction_reference',
+                'string',
+            ],
+            'bank_transfer_to'   => ['exclude_unless:payment_method,TRANSFER', 'string'],
+            'transfer_charges'   => ['exclude_unless:payment_method,TRANSFER', 'numeric', 'min:0'],
+        ]);
+
+        try {
+            $staff = Auth::user();
+
+            return DB::transaction(function () use ($request, $staff) {
+                $payments = Payment::with(['patient.wallet', 'patient.organisationHmo'])
+                    ->whereIn('id', $request->ids)
+                    ->lockForUpdate()
+                    ->get();
+
+                $results   = [];
+                $failed    = [];
+
+                foreach ($payments as $payment) {
+                    // --- Already completed ---
+                    if ($payment->status === PaymentStatus::COMPLETED->value) {
+                        $failed[] = [
+                            'id'      => $payment->id,
+                            'message' => 'Payment already marked as paid.',
+                        ];
+                        continue;
+                    }
+
+                    // ----------------------------------------------------------------
+                    // PHARMACY — inventory deduction + sale history
+                    // ----------------------------------------------------------------
+                    if ($payment->type === 'PHARMACY') {
+                        $saleRecord = ProductSales::with(['payment', 'salesItems'])
+                            ->whereHas('payment', fn($q) => $q->where('id', $payment->id))
+                            ->first();
+
+                        if ($saleRecord) {
+                            foreach ($saleRecord->salesItems as $item) {
+                                if (!$item->product_id) continue;
+
+                                $product = Product::where('id', $item->product_id)->lockForUpdate()->first();
+
+                                if (!$product) {
+                                    $failed[] = ['id' => $payment->id, 'message' => "Product not found for sales."];
+                                    continue 2; // skip this payment
+                                }
+
+                                if ($product->quantity_available_for_sales < $item->quantity_sold) {
+                                    $failed[] = [
+                                        'id'      => $payment->id,
+                                        'message' => "Insufficient stock for {$product->brand_name}. Available: {$product->quantity_available_for_sales}",
+                                    ];
+                                    continue 2;
+                                }
+
+                                $product->quantity_sold                  += $item->quantity_sold;
+                                $product->quantity_available_for_sales   -= $item->quantity_sold;
+                                $product->save();
+                            }
+
+                            $existingHistory   = is_array($saleRecord->history)
+                                ? $saleRecord->history
+                                : json_decode($saleRecord->history ?? '[]', true);
+
+                            $saleRecord->history = array_merge($existingHistory, [[
+                                'date'      => now(),
+                                'action'    => 'PAYMENT_COMPLETED',
+                                'staff'     => "$staff->name ($staff->staff_number)",
+                                'reference' => $payment->transaction_reference,
+                                'amount'    => $payment->amount_payable,
+                            ]]);
+
+                            $saleRecord->save();
+                        }
+                    }
+
+                    // ----------------------------------------------------------------
+                    // DEPOSIT — wallet credit + outstanding settlement
+                    // ----------------------------------------------------------------
+                    if ($payment->type === 'DEPOSIT') {
+                        $wallet        = $payment->patient->wallet;
+                        $beforeBalance = (float) $wallet->deposit_balance;
+                        $depositAmount = (float) $payment->amount_payable;
+                        $outstanding   = (float) ($wallet->outstanding_balance ?? 0);
+
+                        $usedToSettleOutstanding = 0;
+
+                        if ($outstanding > 0) {
+                            if ($depositAmount >= $outstanding) {
+                                $depositAmount           -= $outstanding;
+                                $usedToSettleOutstanding  = $outstanding;
+                                $wallet->outstanding_balance = 0;
+                            } else {
+                                $wallet->outstanding_balance -= $depositAmount;
+                                $usedToSettleOutstanding     = $depositAmount;
+                                $depositAmount               = 0;
+                            }
+                        }
+
+                        $wallet->deposit_balance += $depositAmount;
+                        $wallet->save();
+
+                        WalletTransaction::create([
+                            'wallet_id'        => $wallet->id,
+                            'payment_id'       => $payment->id,
+                            'transaction_type' => 'CREDIT',
+                            'amount'           => $payment->amount_payable,
+                            'balance_before'   => $beforeBalance,
+                            'balance_after'    => $wallet->deposit_balance,
+                            'description'      => 'Patient deposit',
+                            'meta'             => json_encode([
+                                'original_deposit'             => (float) $payment->amount_payable,
+                                'used_to_settle_outstanding'   => $usedToSettleOutstanding,
+                                'credited_to_deposit_balance'  => $depositAmount,
+                            ]),
+                        ]);
+                    }
+
+                    // ----------------------------------------------------------------
+                    // WALLET — debit wallet, track outstanding if insufficient
+                    // ----------------------------------------------------------------
+                    if ($request->payment_method === 'WALLET') {
+                        $wallet        = $payment->patient->wallet;
+                        $beforeBalance = (float) $wallet->deposit_balance;
+                        $amountPayable = (float) $payment->amount_payable;
+
+                        if ($beforeBalance < $amountPayable) {
+                            $outstanding                 = $amountPayable - $beforeBalance;
+                            $wallet->deposit_balance     = 0;
+                            $wallet->outstanding_balance = ($wallet->outstanding_balance ?? 0) + $outstanding;
+                            $afterBalance                = 0;
+                        } else {
+                            $wallet->deposit_balance -= $amountPayable;
+                            $afterBalance             = $wallet->deposit_balance;
+                        }
+
+                        $wallet->save();
+
+                        WalletTransaction::create([
+                            'wallet_id'        => $wallet->id,
+                            'payment_id'       => $payment->id,
+                            'transaction_type' => 'DEBIT',
+                            'amount'           => $amountPayable,
+                            'balance_before'   => $beforeBalance,
+                            'balance_after'    => $afterBalance,
+                            'description'      => 'Wallet debit for payment',
+                        ]);
+                    }
+
+                    // ----------------------------------------------------------------
+                    // HMO — validate patient is linked to the selected org
+                    // Note: No amount split in bulk (use amount_payable as-is)
+                    // ----------------------------------------------------------------
+                    if ($request->payment_method === 'HMO') {
+                        $patientHmoId = $payment->patient->organisationHmo?->id;
+
+                        if (!$patientHmoId || $request->hmo_id != $patientHmoId) {
+                            $failed[] = [
+                                'id'      => $payment->id,
+                                'message' => 'Patient is not linked to the selected organization.',
+                            ];
+                            continue;
+                        }
+
+                        $insuranceProvider = OrganisationAndHmo::find($request->hmo_id);
+                        if (!$insuranceProvider) {
+                            $failed[] = [
+                                'id'      => $payment->id,
+                                'message' => 'Organization detail not found.',
+                            ];
+                            continue;
+                        }
+
+                        $payment->hmo_id = $insuranceProvider->id;
+                    }
+
+                    // ----------------------------------------------------------------
+                    // TRANSFER — shared reference across the batch
+                    // ----------------------------------------------------------------
+                    if ($request->payment_method === 'TRANSFER') {
+                        $payment->reference        = $request->transfer_reference;
+                        $payment->bank_transfer_to = $request->bank_transfer_to;
+                        $payment->transfer_charges = $request->transfer_charges ?? 0;
+                    }
+
+                    // ----------------------------------------------------------------
+                    // Payment history entry
+                    // ----------------------------------------------------------------
+                    $existingHistory = is_array($payment->history)
+                        ? $payment->history
+                        : json_decode($payment->history ?? '[]', true);
+
+                    $payment->history = array_merge($existingHistory, [
+                        ['date' => now(), 'title' => PaymentStatus::COMPLETED],
+                        [
+                            'date'             => now(),
+                            'title'            => 'CONFIRMED',
+                            'confirmed_by'     => "$staff->name ($staff->staff_number)",
+                            'transfer_charges' => $request->payment_method === 'TRANSFER'
+                                ? (float) $request->transfer_charges
+                                : null,
+                        ],
+                    ]);
+
+                    // ----------------------------------------------------------------
+                    // Finalise payment record
+                    // ----------------------------------------------------------------
+                    $payment->status         = PaymentStatus::COMPLETED->value;
+                    $payment->payment_method = $request->payment_method;
+                    $payment->remark         = $request->remark;
+                    $payment->lastUpdatedBy()->associate($staff);
+                    $payment->confirmedBy()->associate($staff);
+                    $payment->save();
+
+                    // ----------------------------------------------------------------
+                    // ProductSales polymorphic update
+                    // ----------------------------------------------------------------
+                    if ($payment->payable_type === ProductSales::class && $payment->payable_id) {
+                        ProductSales::where('id', $payment->payable_id)->update([
+                            'payment_id'       => $payment->id,
+                            'status'           => 'PAID',
+                            'confirmed_by_id'  => $staff->id,
+                        ]);
+
+                        $sale = ProductSales::find($payment->payable_id);
+                        if ($sale) {
+                            $saleHistory   = is_array($sale->history) ? $sale->history : json_decode($sale->history ?? '[]', true);
+                            $saleHistory[] = [
+                                'date'       => now(),
+                                'action'     => 'PAYMENT_CONFIRMED',
+                                'staff'      => "$staff->name ($staff->staff_number)",
+                                'payment_id' => $payment->id,
+                                'amount'     => $payment->amount_payable,
+                            ];
+                            $sale->history = $saleHistory;
+                            $sale->save();
+                        }
+                    }
+
+                    if ($payment->type === 'PHARMACY' && $payment->payable_type !== ProductSales::class) {
+                        $possibleSales = ProductSales::where('invoice_id', $payment->invoice_id)->get();
+                        foreach ($possibleSales as $ps) {
+                            $ps->payment_id      = $payment->id;
+                            $ps->status          = 'PAID';
+                            $ps->confirmed_by_id = $staff->id;
+                            $ps->save();
+                        }
+                    }
+
+                    $results[] = $payment->id;
+                }
+
+                return response()->json([
+                    'message'      => "Successfully marked " . count($results) . " payment(s) as paid.",
+                    'updated_ids'  => $results,
+                    'failed'       => $failed, // partial failures reported back to frontend
+                    'success'      => true,
+                ]);
+            });
+        } catch (Exception $th) {
+            Log::error($th->getMessage());
+
+            return response()->json([
+                'message' => 'Something went wrong. Try again in 5 minutes.',
+                'status'  => 'error',
+                'success' => false,
+            ], 500);
+        }
+    }
+
+
+    // public function bulkMarkAsPaid(Request $request)
+    // {
+    //     $request->validate([
+    //         'ids'   => ['required', 'array', 'min:1', 'max:10'],
+    //         'ids.*' => ['required', 'integer', 'exists:payments,id'],
+    //     ]);
+
+    //     $payments = Payment::whereIn('id', $request->ids)
+    //         ->where('status', '!=', 'COMPLETED')
+    //         ->get();
+
+    //     if ($payments->isEmpty()) {
+    //         return response()->json([
+    //             'message' => 'No eligible payments found. They may already be completed.',
+    //         ], 422);
+    //     }
+
+    //     $payments->each(fn($payment) => $payment->update(['status' => 'COMPLETED']));
+
+    //     return response()->json([
+    //         'message' => "Successfully marked {$payments->count()} payment(s) as paid.",
+    //         'updated_ids' => $payments->pluck('id'),
+    //     ]);
+    // }
+
 
     // public function markAsPaid(string $id, Request $request)
     // {

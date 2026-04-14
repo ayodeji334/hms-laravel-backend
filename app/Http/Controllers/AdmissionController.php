@@ -9,6 +9,7 @@ use App\Models\Bed;
 use App\Models\DoctorReport;
 use App\Models\DrugAdministrationChart;
 use App\Models\FluidBalanceChart;
+use App\Models\LabRequest;
 use App\Models\Note;
 use App\Models\NurseReport;
 use App\Models\Patient;
@@ -420,6 +421,7 @@ class AdmissionController extends Controller
 
     private function getFinancialSummary($admissionId)
     {
+        Log::info("Generating financial summary for admission ID: " . $admissionId);
         try {
             $admission = Admission::with('patient')->findOrFail($admissionId);
             $patientId = $admission->patient_id;
@@ -433,14 +435,45 @@ class AdmissionController extends Controller
             $bedPrice = $room?->bed_space_charges ?? 0;
             $bedCost = $bedPrice * $daysSpent;
 
-            // Fetch treatments
+            // Treatments and related items/tests
             $treatments = DB::table('treatments')
                 ->where('admission_id', $admissionId)
                 ->orderBy('created_at', 'asc')
                 ->get();
-            $treatmentIds = $treatments->pluck('id');
 
-            // Fetch treatment items
+            $treatmentIds = $treatments->pluck('id')->toArray();
+
+            // Payments made directly against the admission
+            $admissionPayments = Payment::where('patient_id', $patientId)
+                ->where('payable_type', Admission::class)
+                ->where('payable_id', $admissionId)
+                ->where('status', PaymentStatus::COMPLETED->value)
+                ->select('id', 'amount', 'created_at as payment_date', 'transaction_reference', 'type')
+                ->orderBy('created_at', 'asc')
+                ->get();
+
+            // Lab requests — join payments to track paid status per request
+            $labRequests = DB::table('lab_requests as lr')
+                ->join('services as s', 's.id', '=', 'lr.service_id')
+                ->leftJoin('payments as pay', function ($join) {
+                    $join->on('pay.payable_id', '=', 'lr.id')
+                        ->where('pay.payable_type', '=', LabRequest::class);
+                })
+                ->whereIn('lr.treatment_id', $treatmentIds)
+                ->select(
+                    'lr.id',
+                    'lr.treatment_id',
+                    'lr.priority',
+                    's.name as service_name',
+                    's.price as service_price',
+                    'pay.id as payment_id',
+                    'pay.status as payment_status',
+                    'pay.amount_payable as payment_amount',
+                    'pay.created_at as payment_date'
+                )
+                ->get();
+
+            // Treatment items
             $treatmentItems = DB::table('treatment_items as ti')
                 ->leftJoin('products as p', 'p.id', '=', 'ti.product_id')
                 ->whereIn('ti.treatment_id', $treatmentIds)
@@ -454,140 +487,168 @@ class AdmissionController extends Controller
                 )
                 ->get();
 
-            // Fetch lab requests
-            $labRequests = DB::table('lab_requests as lr')
-                ->join('services as s', 's.id', '=', 'lr.service_id')
-                ->whereIn('lr.treatment_id', $treatmentIds)
-                ->select(
-                    'lr.id',
-                    'lr.treatment_id',
-                    'lr.priority',
-                    's.name as service_name',
-                    's.price as service_price'
-                )
-                ->get();
-
-            // Fetch prescriptions with payment status
-            $prescriptions = DB::table('prescriptions as pr')
-                ->join('prescription_items as pi', 'pi.prescription_id', '=', 'pr.id')
-                ->join('products as p', 'p.id', '=', 'pi.product_id')
-                ->leftJoin('product_sales as ps', 'ps.prescription_id', '=', 'pr.id')
+            // Prescription sales — track payment status per sale (mirrors visitation approach)
+            $prescriptionSales = DB::table('product_sales as ps')
+                ->join('prescriptions as p', 'ps.prescription_id', '=', 'p.id')
                 ->leftJoin('payments as pay', function ($join) {
                     $join->on('pay.payable_id', '=', 'ps.id')
-                        ->where('pay.payable_type', ProductSales::class)
-                        ->where('pay.status', 'COMPLETED');
+                        ->where('pay.payable_type', '=', ProductSales::class)
+                        ->where('pay.status', '=', 'COMPLETED');
                 })
-                ->where('pr.admission_id', $admissionId)
+                ->where('p.admission_id', $admissionId)
                 ->select(
-                    'pr.id as prescription_id',
-                    'p.id as product_id',
-                    'p.brand_name as product_name',
-                    'pi.dosage',
-                    'pi.duration',
-                    'pi.frequency',
-                    'pi.dispensed_by_id',
-                    'pi.history',
-                    'p.unit_price',
-                    'pr.created_at',
-                    DB::raw('(p.unit_price) as total_amount'),
-                    DB::raw('CASE WHEN COUNT(pay.id) > 0 THEN 1 ELSE 0 END as is_paid')
+                    'ps.id as sale_id',
+                    'ps.prescription_id',
+                    'ps.total_price as amount',
+                    'pay.id as payment_id',
+                    'pay.status as payment_status',
+                    'pay.amount as payment_amount',
+                    'ps.created_at as sale_date',
+                    'p.admission_id as prescription_admission_id'
                 )
-                ->groupBy(
-                    'pr.id',
-                    'p.id',
-                    'p.brand_name',
-                    'pi.dosage',
-                    'pi.duration',
-                    'pi.frequency',
-                    'pi.dispensed_by_id',
-                    'pi.history',
-                    'pr.created_at',
-                    'p.unit_price'
-                )
+                ->orderBy('ps.created_at', 'asc')
                 ->get();
+            // $prescriptionSales = DB::table('product_sales as ps')
+            //     ->join('prescriptions as p', 'ps.prescription_id', '=', 'p.id')
+            //     ->leftJoin('payments as pay', 'ps.payment_id', '=', 'pay.id')
+            //     ->where('p.admission_id', $admissionId)
+            //     ->select(
+            //         'ps.id as sale_id',
+            //         'ps.prescription_id',
+            //         'ps.total_price as amount',
+            //         'ps.payment_id',
+            //         'pay.status as payment_status',
+            //         'ps.created_at as sale_date',
+            //         'p.admission_id as prescription_admission_id'
+            //     )
+            //     ->orderBy('ps.created_at', 'asc')
+            //     ->get();
 
-            // Fetch payments made directly to admission
-            $admissionPayments = Payment::where('patient_id', $patientId)
-                ->where('payable_type', Admission::class)
-                ->where('payable_id', $admissionId)
-                ->where('status', PaymentStatus::COMPLETED->value)
-                ->get();
+            $totalPrescriptionSales = (float) $prescriptionSales->sum('amount');
+            $totalPrescriptionSalesPaid = (float) $prescriptionSales
+                ->where('payment_status', 'COMPLETED')
+                ->sum('amount');
 
-            // Ledger records
+            // Group items and tests under their treatments
+            $treatmentsWithItems = $treatments->map(function ($treatment) use ($treatmentItems, $labRequests) {
+                $items = $treatmentItems->where('treatment_id', $treatment->id)->values();
+                $tests = $labRequests->where('treatment_id', $treatment->id)->values();
+
+                return (object) [
+                    'id' => $treatment->id,
+                    'treatment_date' => $treatment->treatment_date,
+                    'treatment_type' => $treatment->treatment_type,
+                    'items' => $items,
+                    'tests' => $tests,
+                ];
+            });
+
+            // Build ledger records with running balance
             $records = [];
             $balance = 0;
+            $computedTreatmentCost = 0;
 
-            // Treatments with items and tests
-            foreach ($treatments as $treatment) {
+            foreach ($treatmentsWithItems as $treatment) {
                 // Session charge
-                $sessionCharge = 1000;
-                $balance += $sessionCharge;
+                $balance += 1000;
+                $computedTreatmentCost += 1000;
                 $records[] = [
                     'date' => $treatment->treatment_date,
                     'qty' => 1,
                     'particular' => $treatment->treatment_type . ' Treatment Charge',
-                    'charges' => $sessionCharge,
+                    'charges' => 1000,
                     'credit' => 0,
                     'balance' => $balance,
                 ];
 
-                // Treatment items
-                foreach ($treatmentItems->where('treatment_id', $treatment->id) as $item) {
+                // Treatment items (drugs)
+                foreach ($treatment->items as $item) {
                     $balance += $item->total_charge;
+                    $computedTreatmentCost += $item->total_charge;
                     $records[] = [
                         'date' => $treatment->treatment_date,
                         'qty' => $item->quantity,
-                        'particular' => $item->item_name,
+                        'particular' => $item->item_name . ' Drugs',
                         'charges' => $item->total_charge,
                         'credit' => 0,
                         'balance' => $balance,
                     ];
                 }
 
-                // Lab tests
-                foreach ($labRequests->where('treatment_id', $treatment->id) as $test) {
+                // Lab tests — apply credit inline if already paid
+                foreach ($treatment->tests as $test) {
                     $balance += $test->service_price;
+                    $computedTreatmentCost += $test->service_price;
                     $records[] = [
                         'date' => $treatment->treatment_date,
                         'qty' => 1,
                         'particular' => $test->service_name . ' Test',
-                        'charges' => (float) $test->service_price,
+                        'charges' => (int) $test->service_price,
                         'credit' => 0,
                         'balance' => $balance,
                     ];
+
+                    Log::info("Test Status: " . $test->payment_status);
+
+                    if (!empty($test->payment_status) && strtoupper($test->payment_status) === 'COMPLETED') {
+                        $paidAmount = (float) ($test->payment_amount ?? $test->service_price);
+                        $balance -= $paidAmount;
+                        $records[] = [
+                            'date' => $test->payment_date
+                                ? Carbon::parse($test->payment_date)->format('Y-m-d')
+                                : null,
+                            'qty' => 1,
+                            'particular' => 'Lab Payment (Request ID: ' . $test->id . ')',
+                            'charges' => 0,
+                            'credit' => $paidAmount,
+                            'balance' => $balance,
+                        ];
+                    }
                 }
             }
 
-            // Prescriptions
-            foreach ($prescriptions as $prescription) {
-                Log::info(json_encode($prescription));
-                if ($prescription->is_paid) {
-                    $balance -= $prescription->total_amount;
+            // Prescription sales — charge then credit if paid, inline
+            foreach ($prescriptionSales as $sale) {
+                // Defensive guard: skip if sale doesn't belong to this admission
+                if ((int) $sale->prescription_admission_id !== (int) $admissionId) {
+                    continue;
+                }
+
+                $saleAmount = (float) $sale->amount;
+                $balance += $saleAmount;
+                $computedTreatmentCost += $saleAmount;
+                $records[] = [
+                    'date' => $sale->sale_date
+                        ? Carbon::parse($sale->sale_date)->format('Y-m-d')
+                        : null,
+                    'qty' => 1,
+                    'particular' => 'Prescription Sale (ID: ' . $sale->sale_id . ')',
+                    'charges' => $saleAmount,
+                    'credit' => 0,
+                    'balance' => $balance,
+                ];
+
+                if (strtoupper((string) $sale->payment_status) === 'COMPLETED') {
+                    $balance -= $saleAmount;
                     $records[] = [
-                        'date' => $prescription->created_at,
-                        'qty' => $prescription->quantity ?? 1,
-                        'particular' => $prescription->product_name . ' (Paid Prescription)',
+                        'date' => $sale->sale_date
+                            ? Carbon::parse($sale->sale_date)->format('Y-m-d')
+                            : null,
+                        'qty' => 1,
+                        'particular' => 'Prescription Payment (Sale ID: ' . $sale->sale_id . ')',
                         'charges' => 0,
-                        'credit' => (float) $prescription->total_amount,
-                        'balance' => $balance,
-                    ];
-                } else {
-                    $balance += $prescription->total_amount;
-                    $records[] = [
-                        'date' => $prescription->created_at,
-                        'qty' => $prescription->quantity ?? 1,
-                        'particular' => $prescription->product_name . ' (Yet to Pay Prescription)',
-                        'charges' => (float) $prescription->total_amount,
-                        'credit' => 0,
+                        'credit'  => $saleAmount,
                         'balance' => $balance,
                     ];
                 }
             }
 
-            // Bed charges
+            // Bed space charge
             $balance += $bedCost;
             $records[] = [
-                'date' => $admission->admission_date ? Carbon::parse($admission->admission_date)->format('Y-m-d') : null,
+                'date' => $admission->admission_date
+                    ? Carbon::parse($admission->admission_date)->format('Y-m-d')
+                    : null,
                 'qty' => $daysSpent,
                 'particular' => 'Bed Space (' . $daysSpent . ' days)',
                 'charges' => $bedCost,
@@ -595,27 +656,27 @@ class AdmissionController extends Controller
                 'balance' => $balance,
             ];
 
-            // Admission payments
             foreach ($admissionPayments as $pay) {
                 $balance -= $pay->amount;
                 $records[] = [
-                    'date' => $pay->created_at ? Carbon::parse($pay->created_at)->format('Y-m-d') : null,
-                    'qty' => '',
-                    'particular' => 'Payment (Ref: ' . $pay->transaction_reference . ')',
+                    'date' => $pay->payment_date
+                        ? Carbon::parse($pay->payment_date)->format('Y-m-d')
+                        : null,
+                    'qty' => 1,
+                    'particular' => 'Payment ' . $pay->type . ' (Ref: ' . $pay->transaction_reference . ')',
                     'charges' => 0,
                     'credit' => $pay->amount,
                     'balance' => $balance,
                 ];
             }
 
-            // Totals
-            $totalTreatmentCost = $treatments->count() * 1000 + $treatmentItems->sum('total_charge') + $labRequests->sum('service_price');
-            $totalPrescriptionPaid = $prescriptions->where('is_paid', 1)->sum('total_amount');
-            $totalPrescriptionOutstanding = $prescriptions->where('is_paid', 0)->sum('total_amount');
-            $totalAdmissionPayments = $admissionPayments->sum('amount');
-            $prescriptionItemsCost = $prescriptions->sum('total_amount');
-            $totalCharges = $bedCost + $totalTreatmentCost + $totalPrescriptionOutstanding;
-            $totalPayments = $totalAdmissionPayments + $totalPrescriptionPaid;
+            Log::info("Computed Treatment Cost: " . $computedTreatmentCost);
+
+            // Final totals
+            $totalCharges = $bedCost + $computedTreatmentCost;
+            $totalPayments = $admissionPayments->sum('amount')
+                + $totalPrescriptionSalesPaid
+                + $labRequests->where('payment_status', 'COMPLETED')->sum('payment_amount');
             $balanceDue = max(0, $totalCharges - $totalPayments);
 
             return [
@@ -629,11 +690,12 @@ class AdmissionController extends Controller
                 'summary' => [
                     'records' => $records,
                     'bed_cost' => (float) $bedCost,
-                    'treatment_session_cost' => (float) ($treatments->count() * 1000),
-                    'treatment_items_cost' => (float) $treatmentItems->sum('total_charge'),
-                    'lab_tests_cost' => (float) $labRequests->sum('service_price'),
-                    'prescriptions_cost' => $prescriptionItemsCost,
-                    'total_treatment_cost' => (float) $totalTreatmentCost,
+                    'treatment_session_cost' => (int) ($treatments->count() * 1000),
+                    'item_cost' => (float) $treatmentItems->sum('total_charge'),
+                    'test_cost' => (float) $labRequests->sum('service_price'),
+                    'treatment_cost' => (float) $computedTreatmentCost,
+                    'prescription_sales_total' => (float) $totalPrescriptionSales,
+                    'prescription_sales_paid_total' => (float) $totalPrescriptionSalesPaid,
                     'total_charges' => (float) $totalCharges,
                     'total_payments' => (float) $totalPayments,
                     'outstanding_balance' => (float) $balanceDue,
@@ -641,6 +703,7 @@ class AdmissionController extends Controller
             ];
         } catch (Exception $e) {
             Log::error('Financial summary error: ' . $e->getMessage());
+
             return response()->json([
                 'message' => 'Something went wrong. Try again in 5 minutes',
                 'status' => 'error',
@@ -648,6 +711,237 @@ class AdmissionController extends Controller
             ], 500);
         }
     }
+
+    // private function getFinancialSummary($admissionId)
+    // {
+    //     try {
+    //         $admission = Admission::with('patient')->findOrFail($admissionId);
+    //         $patientId = $admission->patient_id;
+    //         $now = now();
+
+    //         // Calculate days spent and bed cost
+    //         $admissionDate = Carbon::parse($admission->admission_date);
+    //         $daysSpent = max(1, (int) $admissionDate->diffInDays($now));
+    //         $bed = $admission->bed;
+    //         $room = $bed?->room;
+    //         $bedPrice = $room?->bed_space_charges ?? 0;
+    //         $bedCost = $bedPrice * $daysSpent;
+
+    //         // Fetch treatments
+    //         $treatments = DB::table('treatments')
+    //             ->where('admission_id', $admissionId)
+    //             ->orderBy('created_at', 'asc')
+    //             ->get();
+    //         $treatmentIds = $treatments->pluck('id');
+
+    //         // Fetch treatment items
+    //         $treatmentItems = DB::table('treatment_items as ti')
+    //             ->leftJoin('products as p', 'p.id', '=', 'ti.product_id')
+    //             ->whereIn('ti.treatment_id', $treatmentIds)
+    //             ->select(
+    //                 'ti.id as treatment_item_id',
+    //                 'ti.treatment_id',
+    //                 'p.brand_name as item_name',
+    //                 'p.unit_price',
+    //                 'ti.quantity',
+    //                 DB::raw('(COALESCE(ti.quantity,0) * COALESCE(p.unit_price,0)) as total_charge')
+    //             )
+    //             ->get();
+
+    //         // Fetch lab requests
+    //         $labRequests = DB::table('lab_requests as lr')
+    //             ->join('services as s', 's.id', '=', 'lr.service_id')
+    //             ->whereIn('lr.treatment_id', $treatmentIds)
+    //             ->select(
+    //                 'lr.id',
+    //                 'lr.treatment_id',
+    //                 'lr.priority',
+    //                 's.name as service_name',
+    //                 's.price as service_price'
+    //             )
+    //             ->get();
+
+    //         // Fetch prescriptions with payment status
+    //         $prescriptions = DB::table('prescriptions as pr')
+    //             ->join('prescription_items as pi', 'pi.prescription_id', '=', 'pr.id')
+    //             ->join('products as p', 'p.id', '=', 'pi.product_id')
+    //             ->leftJoin('product_sales as ps', 'ps.prescription_id', '=', 'pr.id')
+    //             ->leftJoin('payments as pay', function ($join) {
+    //                 $join->on('pay.payable_id', '=', 'ps.id')
+    //                     ->where('pay.payable_type', ProductSales::class)
+    //                     ->where('pay.status', 'COMPLETED');
+    //             })
+    //             ->where('pr.admission_id', $admissionId)
+    //             ->select(
+    //                 'pr.id as prescription_id',
+    //                 'p.id as product_id',
+    //                 'p.brand_name as product_name',
+    //                 'pi.dosage',
+    //                 'pi.duration',
+    //                 'pi.frequency',
+    //                 'pi.dispensed_by_id',
+    //                 'pi.history',
+    //                 'p.unit_price',
+    //                 'pr.created_at',
+    //                 DB::raw('(p.unit_price) as total_amount'),
+    //                 DB::raw('CASE WHEN COUNT(pay.id) > 0 THEN 1 ELSE 0 END as is_paid')
+    //             )
+    //             ->groupBy(
+    //                 'pr.id',
+    //                 'p.id',
+    //                 'p.brand_name',
+    //                 'pi.dosage',
+    //                 'pi.duration',
+    //                 'pi.frequency',
+    //                 'pi.dispensed_by_id',
+    //                 'pi.history',
+    //                 'pr.created_at',
+    //                 'p.unit_price'
+    //             )
+    //             ->get();
+
+    //         // Fetch payments made directly to admission
+    //         $admissionPayments = Payment::where('patient_id', $patientId)
+    //             ->where('payable_type', Admission::class)
+    //             ->where('payable_id', $admissionId)
+    //             ->where('status', PaymentStatus::COMPLETED->value)
+    //             ->get();
+
+    //         // Ledger records
+    //         $records = [];
+    //         $balance = 0;
+
+    //         // Treatments with items and tests
+    //         foreach ($treatments as $treatment) {
+    //             // Session charge
+    //             $sessionCharge = 1000;
+    //             $balance += $sessionCharge;
+    //             $records[] = [
+    //                 'date' => $treatment->treatment_date,
+    //                 'qty' => 1,
+    //                 'particular' => $treatment->treatment_type . ' Treatment Charge',
+    //                 'charges' => $sessionCharge,
+    //                 'credit' => 0,
+    //                 'balance' => $balance,
+    //             ];
+
+    //             // Treatment items
+    //             foreach ($treatmentItems->where('treatment_id', $treatment->id) as $item) {
+    //                 $balance += $item->total_charge;
+    //                 $records[] = [
+    //                     'date' => $treatment->treatment_date,
+    //                     'qty' => $item->quantity,
+    //                     'particular' => $item->item_name,
+    //                     'charges' => $item->total_charge,
+    //                     'credit' => 0,
+    //                     'balance' => $balance,
+    //                 ];
+    //             }
+
+    //             // Lab tests
+    //             foreach ($labRequests->where('treatment_id', $treatment->id) as $test) {
+    //                 $balance += $test->service_price;
+    //                 $records[] = [
+    //                     'date' => $treatment->treatment_date,
+    //                     'qty' => 1,
+    //                     'particular' => $test->service_name . ' Test',
+    //                     'charges' => (float) $test->service_price,
+    //                     'credit' => 0,
+    //                     'balance' => $balance,
+    //                 ];
+    //             }
+    //         }
+
+    //         // Prescriptions
+    //         foreach ($prescriptions as $prescription) {
+    //             Log::info(json_encode($prescription));
+    //             if ($prescription->is_paid) {
+    //                 $balance -= $prescription->total_amount;
+    //                 $records[] = [
+    //                     'date' => $prescription->created_at,
+    //                     'qty' => $prescription->quantity ?? 1,
+    //                     'particular' => $prescription->product_name . ' (Paid Prescription)',
+    //                     'charges' => 0,
+    //                     'credit' => (float) $prescription->total_amount,
+    //                     'balance' => $balance,
+    //                 ];
+    //             } else {
+    //                 $balance += $prescription->total_amount;
+    //                 $records[] = [
+    //                     'date' => $prescription->created_at,
+    //                     'qty' => $prescription->quantity ?? 1,
+    //                     'particular' => $prescription->product_name . ' (Yet to Pay Prescription)',
+    //                     'charges' => (float) $prescription->total_amount,
+    //                     'credit' => 0,
+    //                     'balance' => $balance,
+    //                 ];
+    //             }
+    //         }
+
+    //         // Bed charges
+    //         $balance += $bedCost;
+    //         $records[] = [
+    //             'date' => $admission->admission_date ? Carbon::parse($admission->admission_date)->format('Y-m-d') : null,
+    //             'qty' => $daysSpent,
+    //             'particular' => 'Bed Space (' . $daysSpent . ' days)',
+    //             'charges' => $bedCost,
+    //             'credit' => 0,
+    //             'balance' => $balance,
+    //         ];
+
+    //         // Admission payments
+    //         foreach ($admissionPayments as $pay) {
+    //             $balance -= $pay->amount;
+    //             $records[] = [
+    //                 'date' => $pay->created_at ? Carbon::parse($pay->created_at)->format('Y-m-d') : null,
+    //                 'qty' => '',
+    //                 'particular' => 'Payment (Ref: ' . $pay->transaction_reference . ')',
+    //                 'charges' => 0,
+    //                 'credit' => $pay->amount,
+    //                 'balance' => $balance,
+    //             ];
+    //         }
+
+    //         // Totals
+    //         $totalTreatmentCost = $treatments->count() * 1000 + $treatmentItems->sum('total_charge') + $labRequests->sum('service_price');
+    //         $totalPrescriptionPaid = $prescriptions->where('is_paid', 1)->sum('total_amount');
+    //         $totalPrescriptionOutstanding = $prescriptions->where('is_paid', 0)->sum('total_amount');
+    //         $totalAdmissionPayments = $admissionPayments->sum('amount');
+    //         $prescriptionItemsCost = $prescriptions->sum('total_amount');
+    //         $totalCharges = $bedCost + $totalTreatmentCost + $totalPrescriptionOutstanding;
+    //         $totalPayments = $totalAdmissionPayments + $totalPrescriptionPaid;
+    //         $balanceDue = max(0, $totalCharges - $totalPayments);
+
+    //         return [
+    //             'admission' => [
+    //                 'id' => $admission->id,
+    //                 'patient_id' => $patientId,
+    //                 'admission_date' => $admission->admission_date,
+    //                 'discharge_date' => $admission->discharge_date,
+    //                 'days_spent' => $daysSpent,
+    //             ],
+    //             'summary' => [
+    //                 'records' => $records,
+    //                 'bed_cost' => (float) $bedCost,
+    //                 'treatment_session_cost' => (float) ($treatments->count() * 1000),
+    //                 'treatment_items_cost' => (float) $treatmentItems->sum('total_charge'),
+    //                 'lab_tests_cost' => (float) $labRequests->sum('service_price'),
+    //                 'prescriptions_cost' => $prescriptionItemsCost,
+    //                 'total_treatment_cost' => (float) $totalTreatmentCost,
+    //                 'total_charges' => (float) $totalCharges,
+    //                 'total_payments' => (float) $totalPayments,
+    //                 'outstanding_balance' => (float) $balanceDue,
+    //             ],
+    //         ];
+    //     } catch (Exception $e) {
+    //         Log::error('Financial summary error: ' . $e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
 
     // private function getFinancialSummary($admissionId)
     // {

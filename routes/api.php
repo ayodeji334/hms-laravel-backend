@@ -170,6 +170,7 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('{id}/unconfirm', [PaymentController::class, 'markAsUnPaid']);
         Route::post('/', [PaymentController::class, 'create']);
         Route::patch('{id}', [PaymentController::class, 'update']);
+        Route::post('bulk-mark-paid', [PaymentController::class, 'bulkMarkAsPaid']);
         // Route::delete('{id}', [PaymentController::class, 'delete']);
         // Route::delete('/hmo/{id}', [PaymentController::class, 'deleteHmoPayment']);
     });
