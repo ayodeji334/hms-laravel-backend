@@ -634,51 +634,118 @@ class PaymentController extends Controller
         }
     }
 
-    public function downloadReceipt($id)
+    public function downloadReceipt(Request $request)
     {
         try {
-            $payment = Payment::with([
+            // Accepts ?ids=1,2,3 or a single ?ids=5
+            $ids = array_filter(explode(',', $request->query('ids', '')));
+
+            if (empty($ids)) {
+                return response()->json([
+                    'message' => 'No payment IDs provided',
+                    'status'  => 'error',
+                    'success' => false,
+                ], 400);
+            }
+
+            $payments = Payment::with([
                 'service',
                 'addedBy',
                 'lastUpdatedBy',
                 'confirmedBy',
                 'patient',
-            ])->find($id);
+            ])->whereIn('id', $ids)->get();
 
-
-            if (!$payment) {
-                response()->json([
-                    'message' => 'Payment detail not found',
-                    'status' => 'error',
+            if ($payments->isEmpty()) {
+                return response()->json([
+                    'message' => 'No payment records found',
+                    'status'  => 'error',
                     'success' => false,
                 ], 400);
             }
 
-            Log::info($id . ". Payment Id: " . $payment->amount);
+            $patient = $payments->first()->patient;
 
-            $payment->load(['confirmedBy', 'patient', 'addedBy']);
+            $summary = [
+                'total_amount'          => $payments->sum('amount'),
+                'total_amount_payable'  => $payments->sum('amount_payable'),
+                'total_refund'          => $payments->sum('refund_amount'),
+                'total_count'           => $payments->count(),
+                'payment_date'          => $payments->first()->created_at,
+            ];
+
+            Log::info("Generating receipt for payment IDs: " . implode(',', $ids));
 
             if (!View::exists('receipts.thermal')) {
-                throw new Exception("receipt not found");
+                throw new Exception("Receipt template not found");
             }
 
-            $pdf = Pdf::loadView('receipts.thermal', ['payment' => $payment->toArray()]);
+            $pdf = Pdf::loadView('receipts.thermal', [
+                'payments' => $payments->map->toArray()->toArray(),
+                'patient'  => $patient?->toArray(),
+                'summary'  => $summary,
+            ]);
 
-            $customPaper = array(0, 0, 3.15 * 72, 400);
-
+            // Grow paper height slightly per extra transaction
+            $customPaper = [0, 0, 3.15 * 72, 400 + ($payments->count() * 35)];
             $pdf->setPaper($customPaper, 'portrait');
 
             return $pdf->stream('receipt.pdf');
         } catch (Exception $e) {
-            Log::error('Failed to fetch payment detail: ' . $e->getMessage());
+            Log::error('Failed to generate receipt: ' . $e->getMessage());
 
-            response()->json([
+            return response()->json([
                 'message' => 'Something went wrong. Try again in 5 minutes',
-                'status' => 'error',
+                'status'  => 'error',
                 'success' => false,
             ], 500);
         }
     }
+
+    // public function downloadReceipt($id)
+    // {
+    //     try {
+    //         $payment = Payment::with([
+    //             'service',
+    //             'addedBy',
+    //             'lastUpdatedBy',
+    //             'confirmedBy',
+    //             'patient',
+    //         ])->find($id);
+
+    //         if (!$payment) {
+    //             response()->json([
+    //                 'message' => 'Payment detail not found',
+    //                 'status' => 'error',
+    //                 'success' => false,
+    //             ], 400);
+    //         }
+
+    //         Log::info($id . ". Payment Id: " . $payment->amount);
+
+    //         $payment->load(['confirmedBy', 'patient', 'addedBy']);
+
+    //         if (!View::exists('receipts.thermal')) {
+    //             throw new Exception("receipt not found");
+    //         }
+
+    //         $pdf = Pdf::loadView('receipts.thermal', ['payment' => $payment->toArray()]);
+
+    //         $customPaper = array(0, 0, 3.15 * 72, 400);
+
+    //         $pdf->setPaper($customPaper, 'portrait');
+
+    //         return $pdf->stream('receipt.pdf');
+    //     } catch (Exception $e) {
+    //         Log::error('Failed to fetch payment detail: ' . $e->getMessage());
+
+    //         response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
 
     public function create(CreatePaymentRequest $request)
     {

@@ -157,7 +157,7 @@ Route::middleware("auth:sanctum")->group(function () {
 
     Route::prefix('payments')->middleware('role:ADMIN,SUPER-ADMIN,CASHIER')->group(function () {
         Route::get('/', [PaymentController::class, 'findAll']);
-        Route::get('generate-report', [PaymentController::class, 'exportTransactions']);
+        Route::get('/generate-report', [PaymentController::class, 'exportTransactions']);
         Route::post('{id}/hmo', [PaymentController::class, 'addHMOPayment']);
         Route::patch('{id}/hmo', [PaymentController::class, 'updateHMOPayment']);
         Route::patch('{id}/update-amount-payable', [PaymentController::class, 'updateAmount']);
@@ -165,7 +165,8 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('monthly-stats', [PaymentController::class, 'getMonthlyReport']);
         Route::get('hmo-history', [PaymentController::class, 'findAllOrganisationPayments']);
         Route::get('{id}', [PaymentController::class, 'findOne']);
-        Route::get('{id}/download-receipt', [PaymentController::class, 'downloadReceipt']);
+        // Route::get('{id}/download-receipt', [PaymentController::class, 'downloadReceipt']);
+        Route::get('/receipt/download-receipt', [PaymentController::class, 'downloadReceipt']);
         Route::patch('{id}/confirm', [PaymentController::class, 'markAsPaid']);
         Route::get('{id}/unconfirm', [PaymentController::class, 'markAsUnPaid']);
         Route::post('/', [PaymentController::class, 'create']);
