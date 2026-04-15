@@ -66,6 +66,7 @@ Route::middleware("auth:sanctum")->group(function () {
     });
 
     Route::prefix('visitations')->group(function () {
+        Route::get('{id}/lab-requests', [VisitationController::class, 'getVisitationTests']);
         Route::get('/', [VisitationController::class, 'findAll'])->middleware('role:SUPER-ADMIN,ADMIN,DOCTOR,NURSE');
         Route::get('/today', [VisitationController::class, 'findAllAppointmentsForToday'])->middleware('role:SUPER-ADMIN,ADMIN,DOCTOR,NURSE');
         Route::get('{id}', [VisitationController::class, 'findOne'])->middleware('role:SUPER-ADMIN,ADMIN,DOCTOR');
@@ -147,8 +148,8 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('{id}/overview', [OrganisationAndHmoController::class, 'getOverview']);
         Route::get('{id}/transactions', [OrganisationAndHmoController::class, 'getTransactions']);
         Route::get('{id}/payments', [OrganisationAndHmoController::class, 'getPayments']);
-        Route::get('/', [OrganisationAndHmoController::class, 'findAll'])->middleware('role:ADMIN,SUPER-ADMIN,CASHIER,RECORD-KEEPER');
-        Route::get('{id}', [OrganisationAndHmoController::class, 'findOne'])->middleware('role:ADMIN,SUPER-ADMIN,CASHIER,RECORD-KEEPER');
+        Route::get('/', [OrganisationAndHmoController::class, 'findAll']);
+        Route::get('{id}', [OrganisationAndHmoController::class, 'findOne'])->middleware('role:ADMIN,SUPER-ADMIN,CASHIER');
         Route::post('/', [OrganisationAndHmoController::class, 'create'])->middleware('role:ADMIN,SUPER-ADMIN');
         Route::patch('{id}', [OrganisationAndHmoController::class, 'update'])->middleware('role:ADMIN,SUPER-ADMIN');
         // Route::delete('{id}', [OrganisationAndHmoController::class, 'delete']);
@@ -156,7 +157,7 @@ Route::middleware("auth:sanctum")->group(function () {
 
     Route::prefix('payments')->middleware('role:ADMIN,SUPER-ADMIN,CASHIER')->group(function () {
         Route::get('/', [PaymentController::class, 'findAll']);
-        Route::get('generate-report', [PaymentController::class, 'exportTransactions']);
+        Route::get('/generate-report', [PaymentController::class, 'exportTransactions']);
         Route::post('{id}/hmo', [PaymentController::class, 'addHMOPayment']);
         Route::patch('{id}/hmo', [PaymentController::class, 'updateHMOPayment']);
         Route::patch('{id}/update-amount-payable', [PaymentController::class, 'updateAmount']);
@@ -164,16 +165,18 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('monthly-stats', [PaymentController::class, 'getMonthlyReport']);
         Route::get('hmo-history', [PaymentController::class, 'findAllOrganisationPayments']);
         Route::get('{id}', [PaymentController::class, 'findOne']);
-        Route::get('{id}/download-receipt', [PaymentController::class, 'downloadReceipt']);
+        // Route::get('{id}/download-receipt', [PaymentController::class, 'downloadReceipt']);
+        Route::get('/receipt/download-receipt', [PaymentController::class, 'downloadReceipt']);
         Route::patch('{id}/confirm', [PaymentController::class, 'markAsPaid']);
         Route::get('{id}/unconfirm', [PaymentController::class, 'markAsUnPaid']);
         Route::post('/', [PaymentController::class, 'create']);
         Route::patch('{id}', [PaymentController::class, 'update']);
+        Route::post('bulk-mark-paid', [PaymentController::class, 'bulkMarkAsPaid']);
         // Route::delete('{id}', [PaymentController::class, 'delete']);
         // Route::delete('/hmo/{id}', [PaymentController::class, 'deleteHmoPayment']);
     });
 
-    Route::prefix('admissions')->middleware("role:SUPER-ADMIN,NURSE,DOCTOR")->middleware("role:ADMIN,SUPER-ADMIN,NURSE,DOCTOR")->group(function () {
+    Route::prefix('admissions')->middleware("role:SUPER-ADMIN,NURSE,DOCTOR,CASHIER,ADMIN")->group(function () {
         Route::get('/', [AdmissionController::class, 'findAll']);
         Route::get('{id}', [AdmissionController::class, 'findOne']);
         Route::get('{id}/discharge', [AdmissionController::class, 'discharge']);
@@ -307,14 +310,14 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('/', [PrescriptionController::class, 'findAll']);
         Route::get('{id}', [PrescriptionController::class, 'findOne']);
         Route::post('{id}/add-notes', [PrescriptionController::class, 'addNote'])->middleware("role:SUPER-ADMIN,DOCTOR,NURSE");
-        Route::post('/', [PrescriptionController::class, 'create'])->middleware("role:SUPER-ADMIN,DOCTOR");
-        Route::patch('{id}', [PrescriptionController::class, 'update'])->middleware("role:SUPER-ADMIN,DOCTOR");
+        Route::post('/', [PrescriptionController::class, 'create'])->middleware("role:SUPER-ADMIN,DOCTOR,NURSE");
+        Route::patch('{id}', [PrescriptionController::class, 'update'])->middleware("role:SUPER-ADMIN,DOCTOR,NURSE");
         // Route::delete('{id}', [PrescriptionController::class, 'delete']);
         Route::put('{id}/item', [PrescriptionController::class, 'updatePrescriptionItem'])->middleware("role:SUPER-ADMIN,DOCTOR");
         Route::post('{id}/dispense-items', [PrescriptionController::class, 'markItemsAsDispensed'])->middleware("role:PHARMACIST,SUPER-ADMIN");
         Route::post('{id}/items-not-available', [PrescriptionController::class, 'markItemsNotAvailable'])->middleware("role:PHARMACIST,PHARMACIST,SUPER-ADMIN");;
-        Route::post('{id}/remove-items', [PrescriptionController::class, 'removeItems'])->middleware("role:SUPER-ADMIN,DOCTOR");
-        Route::post('{id}/add-items', [PrescriptionController::class, 'addMoreItems'])->middleware("role:SUPER-ADMIN,DOCTOR");
+        Route::post('{id}/remove-items', [PrescriptionController::class, 'removeItems'])->middleware("role:SUPER-ADMIN,DOCTOR,NURSE");
+        Route::post('{id}/add-items', [PrescriptionController::class, 'addMoreItems'])->middleware("role:SUPER-ADMIN,DOCTOR,NURSE");
         Route::get('{id}/item/{status}', [PrescriptionController::class, 'updatePrescriptionItemStatus'])->middleware("role:SUPER-ADMIN,PHARMACIST");;
     });
 
@@ -331,7 +334,7 @@ Route::middleware("auth:sanctum")->group(function () {
         // Route::delete('{id}', [ServiceController::class, 'delete'])
     });
 
-    Route::prefix('service-categories')->middleware("role:SUPER-ADMIN,ADMIN")->group(function () {
+    Route::prefix('service-categories')->middleware("role:SUPER-ADMIN,ADMIN,CASHIER")->group(function () {
         Route::get('/', [ServiceCategoryController::class, 'findAll']);
         Route::get('/search', [ServiceCategoryController::class, 'getAllWithoutPagination']);
         Route::get('/', [ServiceCategoryController::class, 'findAll']);
@@ -367,6 +370,7 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('/radiology-tests', [LabRequestController::class, 'findAllRadiologyRequests']);
         Route::get('/radiology-requests', [LabRequestController::class, 'findAllRadiologyRequests'])->middleware("role:SUPER-ADMIN,RADIOLOGIST");
         Route::get('/lab-requests', [LabRequestController::class, 'findAllLabRequests']);
+        Route::get('/{id}/download-result', [LabRequestController::class, 'downloadTestResult']);
         Route::get('{id}', [LabRequestController::class, 'findOne']);
         Route::patch('{id}/lab-request', [LabRequestController::class, 'update'])->middleware("role:SUPER-ADMIN,LAB-TECHNOLOGIST");
         Route::patch('{id}/radiology-request', [LabRequestController::class, 'updateRadiology'])->middleware("role:SUPER-ADMIN,RADIOLOGIST");

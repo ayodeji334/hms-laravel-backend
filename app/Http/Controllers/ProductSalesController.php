@@ -187,7 +187,6 @@ class ProductSalesController extends Controller
 
     public function downloadReceipt($id)
     {
-        Log::info($id);
         try {
             $ProductSales = ProductSales::with([
                 'soldBy',
@@ -195,6 +194,8 @@ class ProductSalesController extends Controller
                 'salesItems.product',
                 'payment.confirmedBy.assignedBranch'
             ])->find($id);
+
+            Log::info($ProductSales);
 
             if (!$ProductSales) {
                 response()->json([

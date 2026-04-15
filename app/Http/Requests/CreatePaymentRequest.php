@@ -26,7 +26,7 @@ class CreatePaymentRequest extends FormRequest
             'is_patient' => 'required|boolean',
             'payment_type' => [
                 'required',
-                Rule::in(['SERVICE', 'DEPOSIT']),
+                Rule::in(['SERVICE', 'DEPOSIT', 'ADMISSION']),
             ],
             'payment_method' => [
                 'required',
@@ -40,6 +40,11 @@ class CreatePaymentRequest extends FormRequest
             'service_id' => [
                 'sometimes',
                 'exclude_if:payment_type,DEPOSIT',
+                'integer',
+            ],
+            'admission_id' => [
+                'sometimes',
+                'required_if:payment_type,ADMISSION',
                 'integer',
             ],
             'hmo_id' => [

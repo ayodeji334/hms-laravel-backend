@@ -56,7 +56,7 @@
     <tbody>
         @foreach($transactions as $t)
             <tr>
-                <td>{{ $t->transaction_reference }}</td>
+                <td style="font-size: 20px;font-weight:bold">{{ $t->transaction_reference }}</td>
                 <td>{{ $t->customer_name }}</td>
                 <td>₦{{ number_format($t->amount_payable )}}</td>
                 <td>₦{{ number_format($t->amount) }}</td>

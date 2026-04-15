@@ -29,44 +29,53 @@ class VisitationController extends Controller
 {
     private function getVisitationFinancialSummary($visitationId)
     {
+        Log::info("Generating financial summary for visitation ID: " . $visitationId);
         try {
-            $visitation = Visitation::with('patient.wallet')->findOrFail($visitationId);
+            $visitation = Visitation::with('patient')->findOrFail($visitationId);
 
             $patientId = $visitation->patient_id;
-            $wallet = $visitation->patient?->wallet;
             $now = now();
 
-            // Calculate days spent
+            // Days spent
             $visitationDate = Carbon::parse($visitation->admission_date);
-            $daysSpent = (int) $visitationDate->diffInDays($now) ?: 1;
+            $daysSpent = max(1, (int) $visitationDate->diffInDays($now));
 
-            // consultation cost
-            $consultationService = Service::where('name', 'Consulation')->first();
-            $consultationPrice = $consultationService?->price ?? 500;
-            $consultationCost = $consultationPrice * $daysSpent;
+            // Consultation cost
+            $consultationCost = Payment::where('type', 'CONSULTATION')
+                ->where('payable_type', Visitation::class)
+                ->where('payable_id', $visitationId)
+                ->first()?->amount ?? 1000;
+            // $consultationPrice = $consultationService?->price ?? 500;
+            // $consultationCost = $consultationPrice * $daysSpent;
 
-            // Fetch treatment
+            // Treatments and related items/tests
             $treatments = DB::table('treatments')
                 ->where('visitation_id', $visitationId)
                 ->orderBy('created_at', 'asc')
                 ->get();
 
-            Log::info($treatments->count(), [$visitationId]);
+            $treatmentIds = $treatments->pluck('id')->toArray();
 
-            $treatmentIds = $treatments->pluck('id');
-
-            // Fetch lab requests linked to treatments
             $labRequests = DB::table('lab_requests as lr')
                 ->join('services as s', 's.id', '=', 'lr.service_id')
+                ->leftJoin('payments as pay', function ($join) {
+                    $join->on('pay.payable_id', '=', 'lr.id')
+                        ->where('pay.payable_type', '=', LabRequest::class);
+                })
                 ->whereIn('lr.treatment_id', $treatmentIds)
                 ->select(
                     'lr.id',
                     'lr.treatment_id',
                     'lr.priority',
                     's.name as service_name',
-                    's.price as service_price'
+                    's.price as service_price',
+                    'pay.id as payment_id',
+                    'pay.status as payment_status',
+                    'pay.amount_payable as payment_amount',
+                    'pay.created_at as payment_date'
                 )
                 ->get();
+
 
             $treatmentItems = DB::table('treatment_items as ti')
                 ->leftJoin('products as p', 'p.id', '=', 'ti.product_id')
@@ -81,14 +90,11 @@ class VisitationController extends Controller
                 )
                 ->get();
 
-
-            // Item cost: sum of all product charges
             $itemsCost = $treatmentItems->sum('total_charge');
             $testsCost = $labRequests->sum('service_price');
             $treatmentSessionCost = $treatments->count() * 1000;
-            $treatmentCost = $treatmentSessionCost + $itemsCost;
+            // $treatmentCost = $treatmentSessionCost + $itemsCost;
 
-            // Attach items + tests (lab requests) to treatments
             $treatmentsWithItems = $treatments->map(function ($treatment) use ($treatmentItems, $labRequests) {
                 $items = $treatmentItems->where('treatment_id', $treatment->id)->values();
                 $tests = $labRequests->where('treatment_id', $treatment->id)->values();
@@ -102,15 +108,36 @@ class VisitationController extends Controller
                 ];
             });
 
-            // Calculate costs and generate records
+            // Prescription sales: join product_sales -> prescriptions, include payment status
+            $prescriptionSales = DB::table('product_sales as ps')
+                ->join('prescriptions as p', 'ps.prescription_id', '=', 'p.id')
+                ->leftJoin('payments as pay', 'ps.payment_id', '=', 'pay.id')
+                ->where('p.visitation_id', $visitationId)
+                ->select(
+                    'ps.id as sale_id',
+                    'ps.prescription_id',
+                    'ps.total_price as amount',
+                    'ps.payment_id',
+                    'pay.status as payment_status',
+                    'ps.created_at as sale_date',
+                    'p.visitation_id as prescription_visitation_id'
+                )
+                ->orderBy('ps.created_at', 'asc')
+                ->get();
+
+            $totalPrescriptionSales = (float) $prescriptionSales->sum('amount');
+            $totalPrescriptionSalesPaid = (float) $prescriptionSales
+                ->where('payment_status', 'COMPLETED')
+                ->sum('amount');
+
+            // Build records and running balance
             $records = [];
             $balance = 0;
-            $treatmentCost = 0;
+            $computedTreatmentCost = 0;
 
             foreach ($treatmentsWithItems as $treatment) {
-                // Session charge (₦1000 per treatment)
                 $balance += 1000;
-                $treatmentCost += 1000;
+                $computedTreatmentCost += 1000;
                 $records[] = [
                     'date' => $treatment->treatment_date,
                     'qty' => 1,
@@ -120,14 +147,13 @@ class VisitationController extends Controller
                     'balance' => $balance,
                 ];
 
-                // Add items for the treatment
                 foreach ($treatment->items as $item) {
                     $balance += $item->total_charge;
-                    $treatmentCost += $item->total_charge;
+                    $computedTreatmentCost += $item->total_charge;
                     $records[] = [
                         'date' => $treatment->treatment_date,
                         'qty' => $item->quantity,
-                        'particular' => $item->item_name,
+                        'particular' => $item->item_name . ' Drugs',
                         'charges' => $item->total_charge,
                         'credit' => 0,
                         'balance' => $balance,
@@ -136,7 +162,7 @@ class VisitationController extends Controller
 
                 foreach ($treatment->tests as $test) {
                     $balance += $test->service_price;
-                    $treatmentCost += $test->service_price;
+                    $computedTreatmentCost += $test->service_price;
                     $records[] = [
                         'date' => $treatment->treatment_date,
                         'qty' => 1,
@@ -145,19 +171,65 @@ class VisitationController extends Controller
                         'credit' => 0,
                         'balance' => $balance,
                     ];
+
+                    Log::info("Test Status: " . $test->payment_status);
+
+                    if (!empty($test->payment_status) && strtoupper($test->payment_status) === 'COMPLETED') {
+                        $paidAmount = (float) ($test->payment_amount ?? $test->service_price);
+                        $balance -= $paidAmount;
+                        $records[] = [
+                            'date' => $test->payment_date ? Carbon::parse($test->payment_date)->format('Y-m-d') : null,
+                            'qty' => 1,
+                            'particular' => 'Lab Payment (Request ID: ' . $test->id . ')',
+                            'charges' => 0,
+                            'credit' => $paidAmount,
+                            'balance' => $balance,
+                        ];
+                    }
                 }
             }
 
-            // Payments
+            foreach ($prescriptionSales as $sale) {
+                // defensive guard: skip if prescription_visitation_id is not the target
+                if ((int) $sale->prescription_visitation_id !== (int) $visitationId) {
+                    continue;
+                }
+
+                $saleAmount = (float) $sale->amount;
+                $balance += $saleAmount;
+                $computedTreatmentCost += $saleAmount;
+                $records[] = [
+                    'date' => $sale->sale_date ? Carbon::parse($sale->sale_date)->format('Y-m-d') : null,
+                    'qty' => 1,
+                    'particular' => 'Prescription Sale (ID: ' . $sale->sale_id . ')',
+                    'charges' => $saleAmount,
+                    'credit' => 0,
+                    'balance' => $balance,
+                ];
+
+                if (strtoupper((string) $sale->payment_status) === 'COMPLETED') {
+                    $balance -= $saleAmount;
+                    $records[] = [
+                        'date' => $sale->sale_date ? Carbon::parse($sale->sale_date)->format('Y-m-d') : null,
+                        'qty' => 1,
+                        'particular' => 'Prescription Payment (Sale ID: ' . $sale->sale_id . ')',
+                        'charges' => 0,
+                        'credit' => $saleAmount,
+                        'balance' => $balance,
+                    ];
+                }
+            }
+
+            // Payments attached to the visitation (other payments)
             $payments = Payment::where('patient_id', $patientId)
                 ->where('payable_type', Visitation::class)
                 ->where('payable_id', $visitationId)
                 ->where('status', 'COMPLETED')
-                ->select('id', 'amount', 'created_at as payment_date', 'transaction_reference')
+                ->select('id', 'amount', 'created_at as payment_date', 'transaction_reference', 'type')
                 ->orderBy('created_at', 'asc')
                 ->get();
 
-            // consultation record
+            // Consultation record
             $balance += $consultationCost;
             $records[] = [
                 'date' => $visitation->start_date ? Carbon::parse($visitation->start_date)->format('Y-m-d') : null,
@@ -168,24 +240,25 @@ class VisitationController extends Controller
                 'balance' => $balance,
             ];
 
-            // Add payment records
+            // Add visitation payments (credits)
             foreach ($payments as $pay) {
                 $balance -= $pay->amount;
                 $records[] = [
                     'date' => $pay->payment_date ? Carbon::parse($pay->payment_date)->format('Y-m-d') : null,
                     'qty' => 1,
-                    'particular' => 'Payment (Ref: ' . $pay->transaction_reference . ')',
+                    'particular' => 'Payment ' . $pay->type . ' (Ref: ' . $pay->transaction_reference . ')',
                     'charges' => 0,
                     'credit' => $pay->amount,
                     'balance' => $balance,
                 ];
             }
 
-            // Totals
-            $totalCharges = $consultationCost + $treatmentCost;
-            $totalPayments = $payments->sum('amount');
+            Log::info("Computed Treatment Cost: " . $computedTreatmentCost);
+
+            // Totals and outstanding balance
+            $totalCharges = $consultationCost + $computedTreatmentCost; // includes prescription sales
+            $totalPayments = $payments->sum('amount') + $totalPrescriptionSalesPaid + $labRequests->where('payment_status', 'COMPLETED')->sum('payment_amount');
             $balanceDue = max(0, $totalCharges - $totalPayments);
-            $depositBalance = $wallet?->deposit_balance ?? 0;
 
             return [
                 'visitation' => [
@@ -201,12 +274,12 @@ class VisitationController extends Controller
                     'treatment_session_cost' => (int) $treatmentSessionCost,
                     'item_cost' => (float) $itemsCost,
                     'test_cost' => (float) $testsCost,
-                    'treatment_cost' => (int) $treatmentCost,
+                    'treatment_cost' => (float) $computedTreatmentCost,
+                    'prescription_sales_total' => (float) $totalPrescriptionSales,
+                    'prescription_sales_paid_total' => (float) $totalPrescriptionSalesPaid,
                     'total_charges' => (float) $totalCharges,
                     'total_payments' => (float) $totalPayments,
-                    'balance_due' => (float) $balanceDue,
-                    'deposit_balance' => (float) $depositBalance,
-                    'outstanding_balance' => max(0, $balanceDue - $depositBalance),
+                    'outstanding_balance' => (float) $balanceDue,
                 ]
             ];
         } catch (Exception $e) {
@@ -216,6 +289,223 @@ class VisitationController extends Controller
                 'message' => 'Something went wrong. Try again in 5 minutes',
                 'status' => 'error',
                 'success' => false,
+            ], 500);
+        }
+    }
+
+    // private function getVisitationFinancialSummary($visitationId)
+    // {
+    //     try {
+    //         $visitation = Visitation::with('patient')->findOrFail($visitationId);
+
+    //         $patientId = $visitation->patient_id;
+    //         $now = now();
+
+    //         // Calculate days spent
+    //         $visitationDate = Carbon::parse($visitation->admission_date);
+    //         $daysSpent = max(1, (int) $visitationDate->diffInDays($now));
+
+    //         // consultation cost
+    //         $consultationService = Service::where('name', 'Consulation')->first();
+    //         $consultationPrice = $consultationService?->price ?? 500;
+    //         $consultationCost = $consultationPrice * $daysSpent;
+
+    //         // Fetch treatment
+    //         $treatments = DB::table('treatments')
+    //             ->where('visitation_id', $visitationId)
+    //             ->orderBy('created_at', 'asc')
+    //             ->get();
+
+    //         $treatmentIds = $treatments->pluck('id');
+
+    //         // Fetch lab requests linked to treatments
+    //         $labRequests = DB::table('lab_requests as lr')
+    //             ->join('services as s', 's.id', '=', 'lr.service_id')
+    //             ->whereIn('lr.treatment_id', $treatmentIds)
+    //             ->select(
+    //                 'lr.id',
+    //                 'lr.treatment_id',
+    //                 'lr.priority',
+    //                 's.name as service_name',
+    //                 's.price as service_price'
+    //             )
+    //             ->get();
+
+    //         $treatmentItems = DB::table('treatment_items as ti')
+    //             ->leftJoin('products as p', 'p.id', '=', 'ti.product_id')
+    //             ->whereIn('ti.treatment_id', $treatmentIds)
+    //             ->select(
+    //                 'ti.id as treatment_item_id',
+    //                 'ti.treatment_id',
+    //                 'p.brand_name as item_name',
+    //                 'p.unit_price',
+    //                 'ti.quantity',
+    //                 DB::raw('(COALESCE(ti.quantity,0) * COALESCE(p.unit_price,0)) as total_charge')
+    //             )
+    //             ->get();
+
+
+    //         // Item cost: sum of all product charges
+    //         $itemsCost = $treatmentItems->sum('total_charge');
+    //         $testsCost = $labRequests->sum('service_price');
+    //         $treatmentSessionCost = $treatments->count() * 1000;
+    //         $treatmentCost = $treatmentSessionCost + $itemsCost;
+
+    //         // Attach items + tests (lab requests) to treatments
+    //         $treatmentsWithItems = $treatments->map(function ($treatment) use ($treatmentItems, $labRequests) {
+    //             $items = $treatmentItems->where('treatment_id', $treatment->id)->values();
+    //             $tests = $labRequests->where('treatment_id', $treatment->id)->values();
+
+    //             return (object) [
+    //                 'id' => $treatment->id,
+    //                 'treatment_date' => $treatment->treatment_date,
+    //                 'treatment_type' => $treatment->treatment_type,
+    //                 'items' => $items,
+    //                 'tests' => $tests,
+    //             ];
+    //         });
+
+    //         // Calculate costs and generate records
+    //         $records = [];
+    //         $balance = 0;
+    //         $treatmentCost = 0;
+
+    //         foreach ($treatmentsWithItems as $treatment) {
+    //             $balance += 1000;
+    //             $treatmentCost += 1000;
+    //             $records[] = [
+    //                 'date' => $treatment->treatment_date,
+    //                 'qty' => 1,
+    //                 'particular' => $treatment->treatment_type . ' Treatment Charge',
+    //                 'charges' => 1000,
+    //                 'credit' => 0,
+    //                 'balance' => $balance,
+    //             ];
+
+    //             // Add items for the treatment
+    //             foreach ($treatment->items as $item) {
+    //                 $balance += $item->total_charge;
+    //                 $treatmentCost += $item->total_charge;
+    //                 $records[] = [
+    //                     'date' => $treatment->treatment_date,
+    //                     'qty' => $item->quantity,
+    //                     'particular' => $item->item_name . "Drugs",
+    //                     'charges' => $item->total_charge,
+    //                     'credit' => 0,
+    //                     'balance' => $balance,
+    //                 ];
+    //             }
+
+    //             foreach ($treatment->tests as $test) {
+    //                 $balance += $test->service_price;
+    //                 $treatmentCost += $test->service_price;
+    //                 $records[] = [
+    //                     'date' => $treatment->treatment_date,
+    //                     'qty' => 1,
+    //                     'particular' => $test->service_name . ' Test',
+    //                     'charges' => (int) $test->service_price,
+    //                     'credit' => 0,
+    //                     'balance' => $balance,
+    //                 ];
+    //             }
+    //         }
+
+    //         // Payments
+    //         $payments = Payment::where('patient_id', $patientId)
+    //             ->where('payable_type', Visitation::class)
+    //             ->where('payable_id', $visitationId)
+    //             ->where('status', 'COMPLETED')
+    //             ->select('id', 'amount', 'created_at as payment_date', 'transaction_reference')
+    //             ->orderBy('created_at', 'asc')
+    //             ->get();
+
+    //         // consultation record
+    //         $balance += $consultationCost;
+    //         $records[] = [
+    //             'date' => $visitation->start_date ? Carbon::parse($visitation->start_date)->format('Y-m-d') : null,
+    //             'qty' => 1,
+    //             'particular' => 'Consultation Charge',
+    //             'charges' => $consultationCost,
+    //             'credit' => 0,
+    //             'balance' => $balance,
+    //         ];
+
+    //         // Add payment records
+    //         foreach ($payments as $pay) {
+    //             $balance -= $pay->amount;
+    //             $records[] = [
+    //                 'date' => $pay->payment_date ? Carbon::parse($pay->payment_date)->format('Y-m-d') : null,
+    //                 'qty' => 1,
+    //                 'particular' => 'Payment (Ref: ' . $pay->transaction_reference . ')',
+    //                 'charges' => 0,
+    //                 'credit' => $pay->amount,
+    //                 'balance' => $balance,
+    //             ];
+    //         }
+
+    //         // Totals
+    //         $totalCharges = $consultationCost + $treatmentCost;
+    //         $totalPayments = $payments->sum('amount');
+    //         $balanceDue = max(0, $totalCharges - $totalPayments);
+
+    //         return [
+    //             'visitation' => [
+    //                 'id' => $visitation->id,
+    //                 'patient_id' => $patientId,
+    //                 'visitation_date' => $visitation->visitation_date,
+    //                 'discharge_date' => $visitation->discharge_date,
+    //                 'days_spent' => $daysSpent,
+    //             ],
+    //             'summary' => [
+    //                 'records' => $records,
+    //                 'consultation_cost' => (int) $consultationCost,
+    //                 'treatment_session_cost' => (int) $treatmentSessionCost,
+    //                 'item_cost' => (float) $itemsCost,
+    //                 'test_cost' => (float) $testsCost,
+    //                 'treatment_cost' => (int) $treatmentCost,
+    //                 'total_charges' => (float) $totalCharges,
+    //                 'total_payments' => (float) $totalPayments,
+    //                 'outstanding_balance' => (float) $balanceDue,
+    //             ]
+    //         ];
+    //     } catch (Exception $e) {
+    //         Log::error('Financial summary error: ' . $e->getMessage());
+
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
+
+    /** * Get all lab tests attached to a visitation (paginated). */
+    public function getVisitationTests(Request $request, $visitationId)
+    {
+        try {
+            $perPage = $request->get('per_page', 10); // default 10 per page
+
+            $visitation = Visitation::find($visitationId);
+
+            // Use the relationship and paginate
+            $tests = $visitation->recommendedTests()
+                ->with('service') // eager load service details
+                ->with([
+                    'addedBy',
+                    'testResult.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
+                    'testResult.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number'
+                ])
+                ->paginate($perPage);
+
+            return response()->json([
+                'success' => true,
+                'data' => $tests,
+            ], 200);
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'An error occurred while fetching visitation tests',
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }

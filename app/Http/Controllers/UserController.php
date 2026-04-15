@@ -42,7 +42,7 @@ class UserController extends Controller
             $staff->phone_number = $request->phone_number;
             $staff->gender = $request->gender;
             $staff->staff_number = $request->staff_number;
-            $staff->branch_id = $request->branch_id;
+            // $staff->branch_id = $request->branch_id;
             $staff->role = $request->user_type;
             $staff->save();
 

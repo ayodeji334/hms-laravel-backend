@@ -1119,7 +1119,7 @@ class PrescriptionController extends Controller
             // $query = Prescription::with(['patient', 'requestedBy', 'items', 'notes', 'salesRecord.payment']);
             $query = Prescription::with([
                 'patient',
-                // 'requestedBy',
+                'requestedBy:id,firstname,lastname,staff_number',
                 'items',
                 'items.dispensedBy:id,firstname,lastname,staff_number',
                 'notes',

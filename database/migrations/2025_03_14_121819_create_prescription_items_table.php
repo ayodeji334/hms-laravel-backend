@@ -13,11 +13,11 @@ return new class extends Migration
     {
         Schema::create('prescription_items', function (Blueprint $table) {
             $table->id();
-            $table->string('dosage')->nullable();
+            $table->integer('dosage')->nullable();
             $table->enum('dosage_unit', ['mg', 'ml', 'tablet', 'capsule'])->nullable();
             $table->enum('status', ['CREATED', 'DISPENSED', 'DECLINED'])->default('CREATED');
-            $table->string('frequency')->nullable();
-            $table->string('duration')->nullable();
+            $table->integer('frequency')->nullable();
+            $table->integer('duration')->nullable();
             $table->longText('instructions')->nullable();
             $table->unsignedBigInteger('product_id')->constrained('products')->onDelete('cascade');
             $table->unsignedBigInteger('prescription_id')->constrained('prescriptions')->onDelete('cascade');

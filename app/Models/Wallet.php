@@ -18,4 +18,9 @@ class Wallet extends Model
     {
         return $this->belongsTo(Patient::class);
     }
+
+    public function transactions()
+    {
+        return $this->hasMany(WalletTransaction::class);
+    }
 }

@@ -15,7 +15,7 @@ class Patient extends Model
         return [
             'is_active' => 'boolean',
             'is_debtor' => 'boolean',
-            'is_admitted' => "boolean"
+            'is_admitted' => 'boolean',
         ];
     }
 
@@ -29,6 +29,7 @@ class Patient extends Model
         'firstname',
         'lastname',
         'middlename',
+        'is_admitted',
         'gender',
         'permanent_address',
         'contact_address',

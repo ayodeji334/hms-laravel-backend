@@ -48,7 +48,7 @@ class PaymentController extends Controller
                 'addedBy:id,firstname,lastname',
                 'lastUpdatedBy:id,firstname,lastname',
                 'patient:id,firstname,lastname,patient_reg_no'
-            ])->orderBy('updated_at', 'DESC');
+            ])->orderBy('created_at', 'DESC');
 
             // Apply filters for status
             if (!empty($status)) {
@@ -634,80 +634,141 @@ class PaymentController extends Controller
         }
     }
 
-    public function downloadReceipt($id)
+    public function downloadReceipt(Request $request)
     {
         try {
-            $payment = Payment::with([
+            // Accepts ?ids=1,2,3 or a single ?ids=5
+            $ids = array_filter(explode(',', $request->query('ids', '')));
+
+            if (empty($ids)) {
+                return response()->json([
+                    'message' => 'No payment IDs provided',
+                    'status'  => 'error',
+                    'success' => false,
+                ], 400);
+            }
+
+            $payments = Payment::with([
                 'service',
                 'addedBy',
                 'lastUpdatedBy',
                 'confirmedBy',
                 'patient',
-            ])->find($id);
+            ])->whereIn('id', $ids)->get();
 
-
-            if (!$payment) {
-                response()->json([
-                    'message' => 'Payment detail not found',
-                    'status' => 'error',
+            if ($payments->isEmpty()) {
+                return response()->json([
+                    'message' => 'No payment records found',
+                    'status'  => 'error',
                     'success' => false,
                 ], 400);
             }
 
-            Log::info($id . ". Payment Id: " . $payment->amount);
+            $patient = $payments->first()->patient;
 
-            $payment->load(['confirmedBy', 'patient', 'addedBy']);
+            $summary = [
+                'total_amount'          => $payments->sum('amount'),
+                'total_amount_payable'  => $payments->sum('amount_payable'),
+                'total_refund'          => $payments->sum('refund_amount'),
+                'total_count'           => $payments->count(),
+                'payment_date'          => $payments->first()->created_at,
+            ];
+
+            Log::info("Generating receipt for payment IDs: " . implode(',', $ids));
 
             if (!View::exists('receipts.thermal')) {
-                throw new Exception("receipt not found");
+                throw new Exception("Receipt template not found");
             }
 
-            $pdf = Pdf::loadView('receipts.thermal', ['payment' => $payment->toArray()]);
+            $pdf = Pdf::loadView('receipts.thermal', [
+                'payments' => $payments->map->toArray()->toArray(),
+                'patient'  => $patient?->toArray(),
+                'summary'  => $summary,
+            ]);
 
-            $customPaper = array(0, 0, 3.15 * 72, 400);
-
+            // Grow paper height slightly per extra transaction
+            $customPaper = [0, 0, 3.15 * 72, 400 + ($payments->count() * 35)];
             $pdf->setPaper($customPaper, 'portrait');
 
             return $pdf->stream('receipt.pdf');
         } catch (Exception $e) {
-            Log::error('Failed to fetch payment detail: ' . $e->getMessage());
+            Log::error('Failed to generate receipt: ' . $e->getMessage());
 
-            response()->json([
+            return response()->json([
                 'message' => 'Something went wrong. Try again in 5 minutes',
-                'status' => 'error',
+                'status'  => 'error',
                 'success' => false,
             ], 500);
         }
     }
 
+    // public function downloadReceipt($id)
+    // {
+    //     try {
+    //         $payment = Payment::with([
+    //             'service',
+    //             'addedBy',
+    //             'lastUpdatedBy',
+    //             'confirmedBy',
+    //             'patient',
+    //         ])->find($id);
+
+    //         if (!$payment) {
+    //             response()->json([
+    //                 'message' => 'Payment detail not found',
+    //                 'status' => 'error',
+    //                 'success' => false,
+    //             ], 400);
+    //         }
+
+    //         Log::info($id . ". Payment Id: " . $payment->amount);
+
+    //         $payment->load(['confirmedBy', 'patient', 'addedBy']);
+
+    //         if (!View::exists('receipts.thermal')) {
+    //             throw new Exception("receipt not found");
+    //         }
+
+    //         $pdf = Pdf::loadView('receipts.thermal', ['payment' => $payment->toArray()]);
+
+    //         $customPaper = array(0, 0, 3.15 * 72, 400);
+
+    //         $pdf->setPaper($customPaper, 'portrait');
+
+    //         return $pdf->stream('receipt.pdf');
+    //     } catch (Exception $e) {
+    //         Log::error('Failed to fetch payment detail: ' . $e->getMessage());
+
+    //         response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
+
     public function create(CreatePaymentRequest $request)
     {
         $data = $request->validated();
+
+        Log::info($data);
         DB::beginTransaction();
 
         $serviceTypeMap = [
-            'LAB-TEST' => LabRequest::class,
-            'TREATMENT' => Treatment::class,
-            'ADMISSION' => Admission::class,
-            'ACCOUNT' => Patient::class,
-            'HMO' => OrganisationAndHmo::class,
-            'CONSULTATION' => Visitation::class,
-            'ANTE-NATAL' => AnteNatal::class,
+            'LAB-TEST'       => LabRequest::class,
+            'TREATMENT'      => Treatment::class,
+            'ADMISSION'      => Admission::class,
+            'ACCOUNT'        => Patient::class,
+            'HMO'            => OrganisationAndHmo::class,
+            'CONSULTATION'   => Visitation::class,
+            'ANTE-NATAL'     => AnteNatal::class,
             'RADIOLOGY-TEST' => RadiologyRequest::class,
         ];
 
         try {
-            $staffId = Auth::user()->id;
+            $staffId = Auth::id();
 
-            // Deposit can only be made for patients
-            if ($data['payment_type'] == 'DEPOSIT' && empty($data['is_patient'])) {
-                return response()->json([
-                    'message' => 'You can only make deposit for a patient',
-                    'status' => 'error',
-                    'success' => false
-                ], 400);
-            }
-
+            // Patient check
             $patient = null;
             if (!empty($data['is_patient'])) {
                 $patient = Patient::with('wallet')->find($data['patient_id']);
@@ -721,93 +782,94 @@ class PaymentController extends Controller
             }
 
             $payableType = null;
-            $payableId = null;
+            $payableId   = null;
             $payableTypeName = null;
+            $amountPayable = 0;
 
-            if ($data['payment_type'] == 'SERVICE') {
-                $payableId = $data['service_id'] ?? null;
-                if (!$payableId) {
+            // 🔹 Admission payments (on-the-go)
+            if ($data['payment_type'] === 'ADMISSION') {
+                $admission = Admission::find($data['admission_id']);
+                // ->whereNull('discharge_date')
+                // ->first();
+
+                if (!$admission) {
                     return response()->json([
-                        'message' => 'Service ID (payable_id) is required for SERVICE payments',
+                        'message' => 'No active admission found',
                         'status' => 'error',
-                        'success' => false,
-                    ], 400);
+                        'success' => false
+                    ], 404);
                 }
 
-                // Find the service to get type and price
-                $service = Service::find($payableId);
-                if (!$service) {
-                    return response()->json([
-                        'message' => 'Invalid service selected',
-                        'status' => 'error',
-                        'success' => false,
-                    ], 400);
-                }
-
-                // Get payable type model from service type
-                if (!array_key_exists($service->type, $serviceTypeMap)) {
-                    return response()->json([
-                        'message' => 'Unsupported service type for payment',
-                        'status' => 'error',
-                        'success' => false,
-                    ], 400);
-                }
-
-                $payableType = $serviceTypeMap[$service->type];
-                $payableTypeName = $service->type;
+                $amountPayable = $data['amount']; // patient pays partial or full
+                $payableType   = Admission::class;
+                $payableId     = $admission->id;
+                $payableTypeName = 'ADMISSION';
             }
 
-            $transactionReference = $this->generateUniqueTransactionReference();
-
-            $payment = new Payment();
-            $payment->amount = $data['payment_type'] == 'DEPOSIT'
-                ? $data['amount']
-                : number_format($service->price ?? 0, 3, '.', '');
-            $payment->amount_payable = round($payment->amount);
-            $payment->customer_name = $data['is_patient']
-                ? ($patient->firstname . ' ' . $patient->lastname)
-                : $data['customer_name'] ?? null;
-            $payment->reference = $transactionReference;
-            $payment->transaction_reference = $transactionReference;
-            $payment->patient_id = $data['is_patient'] ? $patient->id : null;
-            $payment->payable_type = $payableType;
-            $payment->added_by_id = $staffId;
-            $payment->confirmed_by_id = $staffId;
-            $payment->payment_method = $data['payment_method'] == 'ACCOUNT-BALANCE' ? 'WALLET' : $data['payment_method'];
-            $payment->type = $data['payment_type'] == 'DEPOSIT' ? 'DEPOSIT' : $payableTypeName;
-            $payment->history = json_encode([
-                ['date' => now()->toDateTimeString(), 'title' => 'CREATED'],
-                ['date' => now()->toDateTimeString(), 'title' => 'PAID']
-            ]);
-            $payment->last_updated_by_id = $staffId;
-
-            if ($data['payment_method'] == 'HMO') {
-                $insurance = OrganisationAndHmo::find($data['hmo_id']);
-                if (!$insurance) {
+            // 🔹 Deposit payments
+            elseif ($data['payment_type'] === 'DEPOSIT') {
+                if (empty($data['is_patient'])) {
                     return response()->json([
-                        'message' => 'Invalid HMO provider',
+                        'message' => 'You can only make deposit for a patient',
                         'status' => 'error',
                         'success' => false
                     ], 400);
                 }
-
-                if (!$patient || $patient->organisation_hmo_id != $insurance->id) {
-                    return response()->json([
-                        'message' => 'The patient does not have an account with the selected organisation or health care provider',
-                        'status' => 'error',
-                        'success' => false,
-                    ], 400);
-                }
-
-                $payment->payable_id = $insurance->id;
+                $amountPayable = $data['amount'];
+                $payableType   = Patient::class;
+                $payableId     = $patient->id;
+                $payableTypeName = 'DEPOSIT';
             }
 
-            $payment->load(['addedBy', 'lastUpdatedBy', 'patient', 'payable'])->save();
+            // 🔹 Service payments
+            elseif ($data['payment_type'] === 'SERVICE') {
+                $service = Service::find($data['service_id']);
+                Log::info("Service", [$service]);
+                if (!$service || !array_key_exists($service->type, $serviceTypeMap)) {
+                    return response()->json([
+                        'message' => 'Invalid or unsupported service',
+                        'status' => 'error',
+                        'success' => false
+                    ], 400);
+                }
+                $amountPayable = floatval($service->price);
+                $payableType   = $serviceTypeMap[$service->type];
+                $payableId     = $service->id;
+                $payableTypeName = $service->type;
+            }
+
+            Log::info("Hello: ", ["payableType" => $payableType, "payableId" => $payableId]);
+
+            $transactionReference = $this->generateUniqueTransactionReference();
+
+            $payment = Payment::create([
+                'amount' => $amountPayable,
+                'amount_payable' => $amountPayable,
+                'transaction_reference' => $transactionReference,
+                'reference' => $transactionReference,
+                'type' => $payableTypeName,
+                'status' => 'CREATED',
+                'payment_method' => $data['payment_method'] == 'ACCOUNT-BALANCE' ? 'WALLET' : $data['payment_method'],
+                'remark' => ucfirst($payableTypeName) . ' payment',
+                'customer_name' => $patient
+                    ? ($patient->firstname . ' ' . $patient->lastname)
+                    : $data['customer_name'] ?? 'Unknown',
+                'is_confirmed' => true,
+                'payable_type' => $payableType,
+                'payable_id' => $payableId,
+                'patient_id' => $patient ? $patient->id : null,
+                'added_by_id' => $staffId,
+                'confirmed_by_id' => $staffId,
+                'last_updated_by_id' => $staffId,
+                'history' => json_encode([
+                    ['date' => now()->toDateTimeString(), 'title' => 'CREATED'],
+                ]),
+            ]);
 
             DB::commit();
 
             return response()->json([
-                'message' => 'Payment detail created Successfully',
+                'message' => 'Payment created successfully',
                 'status' => 'success',
                 'success' => true,
                 'data' => $payment
@@ -823,6 +885,151 @@ class PaymentController extends Controller
             ], 500);
         }
     }
+
+
+    // public function create(CreatePaymentRequest $request)
+    // {
+    //     $data = $request->validated();
+    //     DB::beginTransaction();
+
+    //     $serviceTypeMap = [
+    //         'LAB-TEST' => LabRequest::class,
+    //         'TREATMENT' => Treatment::class,
+    //         'ADMISSION' => Admission::class,
+    //         'ACCOUNT' => Patient::class,
+    //         'HMO' => OrganisationAndHmo::class,
+    //         'CONSULTATION' => Visitation::class,
+    //         'ANTE-NATAL' => AnteNatal::class,
+    //         'RADIOLOGY-TEST' => RadiologyRequest::class,
+    //     ];
+
+    //     try {
+    //         $staffId = Auth::user()->id;
+
+    //         // Deposit can only be made for patients
+    //         if ($data['payment_type'] == 'DEPOSIT' && empty($data['is_patient'])) {
+    //             return response()->json([
+    //                 'message' => 'You can only make deposit for a patient',
+    //                 'status' => 'error',
+    //                 'success' => false
+    //             ], 400);
+    //         }
+
+    //         $patient = null;
+    //         if (!empty($data['is_patient'])) {
+    //             $patient = Patient::with('wallet')->find($data['patient_id']);
+    //             if (!$patient) {
+    //                 return response()->json([
+    //                     'message' => 'Patient not found',
+    //                     'status' => 'error',
+    //                     'success' => false
+    //                 ], 400);
+    //             }
+    //         }
+
+    //         $payableType = null;
+    //         $payableId = null;
+    //         $payableTypeName = null;
+
+    //         if ($data['payment_type'] == 'SERVICE') {
+    //             $payableId = $data['service_id'] ?? null;
+    //             if (!$payableId) {
+    //                 return response()->json([
+    //                     'message' => 'Service ID (payable_id) is required for SERVICE payments',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             // Find the service to get type and price
+    //             $service = Service::find($payableId);
+    //             if (!$service) {
+    //                 return response()->json([
+    //                     'message' => 'Invalid service selected',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             // Get payable type model from service type
+    //             if (!array_key_exists($service->type, $serviceTypeMap)) {
+    //                 return response()->json([
+    //                     'message' => 'Unsupported service type for payment',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             $payableType = $serviceTypeMap[$service->type];
+    //             $payableTypeName = $service->type;
+    //         }
+
+    //         $transactionReference = $this->generateUniqueTransactionReference();
+
+    //         $payment = new Payment();
+    //         $payment->amount = $data['payment_type'] == 'DEPOSIT'
+    //             ? $data['amount']
+    //             : number_format($service->price ?? 0, 3, '.', '');
+    //         $payment->amount_payable = round($payment->amount);
+    //         $payment->customer_name = $data['is_patient']
+    //             ? ($patient->firstname . ' ' . $patient->lastname)
+    //             : $data['customer_name'] ?? null;
+    //         $payment->reference = $transactionReference;
+    //         $payment->transaction_reference = $transactionReference;
+    //         $payment->patient_id = $data['is_patient'] ? $patient->id : null;
+    //         $payment->payable_type = $payableType;
+    //         $payment->added_by_id = $staffId;
+    //         $payment->confirmed_by_id = $staffId;
+    //         $payment->payment_method = $data['payment_method'] == 'ACCOUNT-BALANCE' ? 'WALLET' : $data['payment_method'];
+    //         $payment->type = $data['payment_type'] == 'DEPOSIT' ? 'DEPOSIT' : $payableTypeName;
+    //         $payment->history = json_encode([
+    //             ['date' => now()->toDateTimeString(), 'title' => 'CREATED'],
+    //             ['date' => now()->toDateTimeString(), 'title' => 'PAID']
+    //         ]);
+    //         $payment->last_updated_by_id = $staffId;
+
+    //         if ($data['payment_method'] == 'HMO') {
+    //             $insurance = OrganisationAndHmo::find($data['hmo_id']);
+    //             if (!$insurance) {
+    //                 return response()->json([
+    //                     'message' => 'Invalid HMO provider',
+    //                     'status' => 'error',
+    //                     'success' => false
+    //                 ], 400);
+    //             }
+
+    //             if (!$patient || $patient->organisation_hmo_id != $insurance->id) {
+    //                 return response()->json([
+    //                     'message' => 'The patient does not have an account with the selected organisation or health care provider',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             $payment->payable_id = $insurance->id;
+    //         }
+
+    //         $payment->load(['addedBy', 'lastUpdatedBy', 'patient', 'payable'])->save();
+
+    //         DB::commit();
+
+    //         return response()->json([
+    //             'message' => 'Payment detail created Successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //             'data' => $payment
+    //         ]);
+    //     } catch (Exception $e) {
+    //         DB::rollBack();
+    //         Log::error('Payment creation error: ' . $e->getMessage());
+
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false
+    //         ], 500);
+    //     }
+    // }
 
     public function createPharmacySalesPayment(
         $saleRecord,
@@ -978,7 +1185,6 @@ class PaymentController extends Controller
             ],
         ]);
 
-
         try {
             $staff = Auth::user();
 
@@ -1001,23 +1207,7 @@ class PaymentController extends Controller
                     ], 400);
                 }
 
-                // Handle inventory update if payment is for a pharmacy
-                // if ($payment->type === "PHARMACY") {
-                //     $saleRecord = ProductSales::with(['payment', 'salesItems.product'])
-                //         ->whereHas('payment', fn($q) => $q->where('id', $id))
-                //         ->first();
-
-                //     if ($saleRecord) {
-                //         foreach ($saleRecord->salesItems as $item) {
-                //             if ($item->product) {
-                //                 $item->product->quantity_sold += $item->quantity_sold;
-                //                 $item->product->quantity_available_for_sales -= $item->quantity_sold;
-                //                 $item->product->save();
-                //             }
-                //         }
-                //     }
-                // }
-
+                // If payment is for a pharmacy sale, update inventory and sale history
                 if ($payment->type === "PHARMACY") {
                     $saleRecord = ProductSales::with(['payment', 'salesItems'])
                         ->whereHas('payment', fn($q) => $q->where('id', $id))
@@ -1026,10 +1216,9 @@ class PaymentController extends Controller
                     if ($saleRecord) {
                         foreach ($saleRecord->salesItems as $item) {
                             if (!$item->product_id) {
-                                continue; // skip if product not linked
+                                continue;
                             }
 
-                            // Lock the product row to avoid race conditions
                             $product = Product::where('id', $item->product_id)->lockForUpdate()->first();
 
                             if (!$product) {
@@ -1040,7 +1229,6 @@ class PaymentController extends Controller
                                 ], 400);
                             }
 
-                            // Check if there's enough stock
                             if ($product->quantity_available_for_sales < $item->quantity_sold) {
                                 return response()->json([
                                     'message' => "Insufficient stock for {$product->brand_name}. Available Quantity on Sales: {$product->quantity_available_for_sales}",
@@ -1049,7 +1237,6 @@ class PaymentController extends Controller
                                 ], 400);
                             }
 
-                            // Perform the update safely
                             $product->quantity_sold += $item->quantity_sold;
                             $product->quantity_available_for_sales -= $item->quantity_sold;
                             $product->save();
@@ -1069,11 +1256,12 @@ class PaymentController extends Controller
                             ]
                         ]);
 
+                        // Do not save here yet if you prefer to save after payment is updated below.
                         $saleRecord->save();
                     }
                 }
 
-                // Handle deposit wallet logic
+                // Deposit handling (unchanged)
                 if ($payment->type == 'DEPOSIT') {
                     $wallet = $payment->patient->wallet;
                     $beforeBalance = (float) $wallet->deposit_balance;
@@ -1114,7 +1302,7 @@ class PaymentController extends Controller
                     ]);
                 }
 
-                // Wallet debit
+                // Wallet debit handling (unchanged)
                 if ($payment->patient && $request->payment_method == 'WALLET') {
                     $wallet = $payment->patient->wallet;
                     $beforeBalance = (float) $wallet->deposit_balance;
@@ -1143,32 +1331,8 @@ class PaymentController extends Controller
                     ]);
                 }
 
-                // HMO verification and association
-                // if ($request->payment_method == 'HMO') {
-                //     Log::info($payment->patient);
-                //     $patientHmoId = $payment->patient->organisationHmo->id;
-
-                //     if (!$patientHmoId || $request->hmo_id != $patientHmoId) {
-                //         return response()->json([
-                //             'message' => "The patient is not linked to the selected organization",
-                //             'status' => 'error',
-                //             'success' => false,
-                //         ], 400);
-                //     }
-
-                //     $insuranceProvider = OrganisationAndHmo::find($request->hmo_id);
-                //     if (!$insuranceProvider) {
-                //         return response()->json([
-                //             'message' => 'Organization Detail not found',
-                //             'status' => 'error',
-                //             'success' => false,
-                //         ], 400);
-                //     }
-
-                //     $payment->hmo_id = $insuranceProvider->id;
-                // }
+                // HMO handling (unchanged)
                 if ($request->payment_method == 'HMO') {
-                    Log::info("$payment");
                     $patientHmoId = $payment->patient->organisationHmo?->id;
 
                     if (!$patientHmoId || $request->hmo_id != $patientHmoId) {
@@ -1194,8 +1358,6 @@ class PaymentController extends Controller
                         $requestedHmoAmount = (float) $request->amount;
                         $totalAmount = (float) $payment->amount;
 
-                        Log::info("Request Amount: $requestedHmoAmount, Payment amount payable: $totalAmount");
-
                         if ($requestedHmoAmount > $totalAmount) {
                             return response()->json([
                                 'message' => 'Requested amount cannot exceed the total amount for the service.',
@@ -1204,19 +1366,13 @@ class PaymentController extends Controller
                             ], 400);
                         }
 
-                        // Update the HMO portion
                         $payment->amount_payable = number_format($requestedHmoAmount, 2, '.', '');
                         $payment->last_updated_by_id = $staff->id;
 
-                        // Calculate expected patient portion
-                        $expectedPatientBalance = $totalAmount - $requestedHmoAmount;
-
-                        // Get existing child payments
                         $childPayments = Payment::where('parent_id', $payment->id)->get();
-                        $totalAlreadyAccountedFor = $childPayments->sum(function ($p) {
-                            return (float) $p->amount_payable;
-                        });
+                        $totalAlreadyAccountedFor = $childPayments->sum(fn($p) => (float) $p->amount_payable);
 
+                        $expectedPatientBalance = $totalAmount - $requestedHmoAmount;
                         if ($totalAlreadyAccountedFor > $expectedPatientBalance) {
                             return response()->json([
                                 'message' => 'Patient has already paid more than the expected balance. Please review payments manually.',
@@ -1226,7 +1382,6 @@ class PaymentController extends Controller
                         }
 
                         $newBalanceToBePaid = $expectedPatientBalance - $totalAlreadyAccountedFor;
-
                         if ($newBalanceToBePaid > 0) {
                             $newPayment = new Payment();
                             $newPayment->amount = number_format($newBalanceToBePaid, 2, '.', '');
@@ -1246,19 +1401,14 @@ class PaymentController extends Controller
                     }
                 }
 
-
-                // handle transfer payment
-                // if ($request->payment_method == 'TRANSFER') {
-                //     $payment->transaction_reference = $request->transfer_reference;
-                //     $payment->bank_transfer_to = $request->bank_transfer_to;
-                // }
-                // handle transfer payment
+                // Transfer payment fields
                 if ($request->payment_method == 'TRANSFER') {
                     $payment->reference = $request->transfer_reference;
                     $payment->bank_transfer_to = $request->bank_transfer_to;
                     $payment->transfer_charges = $request->transfer_charges ?? 0;
                 }
 
+                // Append history entries
                 $existingHistory = is_array($payment->history)
                     ? $payment->history
                     : json_decode($payment->history ?? '[]', true);
@@ -1273,12 +1423,99 @@ class PaymentController extends Controller
                     ],
                 ]);
 
-                $payment->status = PaymentStatus::COMPLETED;
+                // Mark payment as completed and associate staff
+                $payment->status = PaymentStatus::COMPLETED->value;
                 $payment->payment_method = $request->payment_method;
                 $payment->lastUpdatedBy()->associate($staff);
                 $payment->confirmedBy()->associate($staff);
                 $payment->remark = $request->remark;
                 $payment->save();
+
+                // ensure ProductSales linked to this payment are marked as paid ---
+                // If this payment is polymorphically attached to a ProductSales record, update that sale.
+                if ($payment->payable_type === ProductSales::class && $payment->payable_id) {
+                    ProductSales::where('id', $payment->payable_id)->update([
+                        'payment_id' => $payment->id,
+                        'status' => 'PAID',
+                        'confirmed_by_id' => $staff->id,
+                    ]);
+
+                    // Optionally append history to the sale (if you want a richer audit)
+                    $sale = ProductSales::find($payment->payable_id);
+                    if ($sale) {
+                        $saleHistory = is_array($sale->history) ? $sale->history : json_decode($sale->history ?? '[]', true);
+                        $saleHistory[] = [
+                            'date' => now(),
+                            'action' => 'PAYMENT_CONFIRMED',
+                            'staff' => "$staff->name ($staff->staff_number)",
+                            'payment_id' => $payment->id,
+                            'amount' => $payment->amount_payable,
+                        ];
+                        $sale->history = $saleHistory;
+                        $sale->save();
+                    }
+                }
+
+                // Also handle the case where product_sales uses payment_id FK (defensive)
+                if ($payment->type === 'PHARMACY' && $payment->payable_type !== ProductSales::class) {
+                    // Try to find product sales by invoice or other linkage and mark them paid
+                    $possibleSales = ProductSales::where('invoice_id', $payment->invoice_id)->get();
+                    foreach ($possibleSales as $ps) {
+                        $ps->payment_id = $payment->id;
+                        $ps->status = 'PAID';
+                        $ps->confirmed_by_id = $staff->id;
+                        $ps->save();
+                    }
+                }
+
+                // --- NEW: ensure LabRequest linked to this payment are marked as paid ---
+                // if ($payment->payable_type === LabRequest::class && $payment->payable_id) {
+                //     // LabRequest::where('id', $payment->payable_id)->update([
+                //     //     'payable_id' => $payment->id,
+                //     //     'status' => 'COMPLETED',
+                //     //     'confirmed_by_id' => $staff->id,
+                //     // ]);
+
+                //     // Append history to the lab request for audit
+                //     $lab = LabRequest::find($payment->payable_id);
+                //     if ($lab) {
+                //         $labHistory = is_array($lab->history) ? $lab->history : json_decode($lab->history ?? '[]', true);
+                //         $labHistory[] = [
+                //             'date' => now(),
+                //             'action' => 'PAYMENT_CONFIRMED',
+                //             'staff' => "$staff->name ($staff->staff_number)",
+                //             'payment_id' => $payment->id,
+                //             'amount' => $payment->amount_payable,
+                //         ];
+                //         $lab->history = $labHistory;
+                //         $lab->save();
+                //     }
+                // }
+
+                // Defensive: if LabRequest uses payment_id FK or is linked by invoice, try to update matching records
+                // if ($payment->type === 'LAB' && $payment->payable_type !== LabRequest::class) {
+                //     // Try to find lab requests by payment_id FK or invoice linkage and mark them paid
+                //     $possibleLabs = LabRequest::where('invoice_id', $payment->invoice_id)
+                //         ->orWhere('payment_id', $payment->id)
+                //         ->get();
+
+                //     foreach ($possibleLabs as $lr) {
+                //         $lr->payment_id = $payment->id;
+                //         $lr->status = 'COMPLETED';
+                //         $lr->confirmed_by_id = $staff->id;
+
+                //         $labHistory = is_array($lr->history) ? $lr->history : json_decode($lr->history ?? '[]', true);
+                //         $labHistory[] = [
+                //             'date' => now(),
+                //             'action' => 'PAYMENT_CONFIRMED (defensive update)',
+                //             'staff' => "$staff->name ($staff->staff_number)",
+                //             'payment_id' => $payment->id,
+                //             'amount' => $payment->amount_payable,
+                //         ];
+                //         $lr->history = $labHistory;
+                //         $lr->save();
+                //     }
+                // }
 
                 return response()->json([
                     'message' => 'Payment marked as paid successfully',
@@ -1296,6 +1533,666 @@ class PaymentController extends Controller
             ], 500);
         }
     }
+
+    public function bulkMarkAsPaid(Request $request)
+    {
+        $request->validate([
+            'ids'                => ['required', 'array', 'min:1', 'max:10'],
+            'ids.*'              => ['required', 'integer', 'exists:payments,id'],
+            'payment_method'     => ['required', Rule::in(['WALLET', 'TRANSFER', 'HMO', 'CASH'])],
+            'remark'             => ['nullable', 'string'],
+            'hmo_id'             => ['exclude_unless:payment_method,HMO', 'integer'],
+            'transfer_reference' => [
+                'exclude_unless:payment_method,TRANSFER',
+                'unique:payments,transaction_reference',
+                'string',
+            ],
+            'bank_transfer_to'   => ['exclude_unless:payment_method,TRANSFER', 'string'],
+            'transfer_charges'   => ['exclude_unless:payment_method,TRANSFER', 'numeric', 'min:0'],
+        ]);
+
+        try {
+            $staff = Auth::user();
+
+            return DB::transaction(function () use ($request, $staff) {
+                $payments = Payment::with(['patient.wallet', 'patient.organisationHmo'])
+                    ->whereIn('id', $request->ids)
+                    ->lockForUpdate()
+                    ->get();
+
+                $results   = [];
+                $failed    = [];
+
+                foreach ($payments as $payment) {
+                    // --- Already completed ---
+                    if ($payment->status === PaymentStatus::COMPLETED->value) {
+                        $failed[] = [
+                            'id'      => $payment->id,
+                            'message' => 'Payment already marked as paid.',
+                        ];
+                        continue;
+                    }
+
+                    // ----------------------------------------------------------------
+                    // PHARMACY — inventory deduction + sale history
+                    // ----------------------------------------------------------------
+                    if ($payment->type === 'PHARMACY') {
+                        $saleRecord = ProductSales::with(['payment', 'salesItems'])
+                            ->whereHas('payment', fn($q) => $q->where('id', $payment->id))
+                            ->first();
+
+                        if ($saleRecord) {
+                            foreach ($saleRecord->salesItems as $item) {
+                                if (!$item->product_id) continue;
+
+                                $product = Product::where('id', $item->product_id)->lockForUpdate()->first();
+
+                                if (!$product) {
+                                    $failed[] = ['id' => $payment->id, 'message' => "Product not found for sales."];
+                                    continue 2; // skip this payment
+                                }
+
+                                if ($product->quantity_available_for_sales < $item->quantity_sold) {
+                                    $failed[] = [
+                                        'id'      => $payment->id,
+                                        'message' => "Insufficient stock for {$product->brand_name}. Available: {$product->quantity_available_for_sales}",
+                                    ];
+                                    continue 2;
+                                }
+
+                                $product->quantity_sold                  += $item->quantity_sold;
+                                $product->quantity_available_for_sales   -= $item->quantity_sold;
+                                $product->save();
+                            }
+
+                            $existingHistory   = is_array($saleRecord->history)
+                                ? $saleRecord->history
+                                : json_decode($saleRecord->history ?? '[]', true);
+
+                            $saleRecord->history = array_merge($existingHistory, [[
+                                'date'      => now(),
+                                'action'    => 'PAYMENT_COMPLETED',
+                                'staff'     => "$staff->name ($staff->staff_number)",
+                                'reference' => $payment->transaction_reference,
+                                'amount'    => $payment->amount_payable,
+                            ]]);
+
+                            $saleRecord->save();
+                        }
+                    }
+
+                    // ----------------------------------------------------------------
+                    // DEPOSIT — wallet credit + outstanding settlement
+                    // ----------------------------------------------------------------
+                    if ($payment->type === 'DEPOSIT') {
+                        $wallet        = $payment->patient->wallet;
+                        $beforeBalance = (float) $wallet->deposit_balance;
+                        $depositAmount = (float) $payment->amount_payable;
+                        $outstanding   = (float) ($wallet->outstanding_balance ?? 0);
+
+                        $usedToSettleOutstanding = 0;
+
+                        if ($outstanding > 0) {
+                            if ($depositAmount >= $outstanding) {
+                                $depositAmount           -= $outstanding;
+                                $usedToSettleOutstanding  = $outstanding;
+                                $wallet->outstanding_balance = 0;
+                            } else {
+                                $wallet->outstanding_balance -= $depositAmount;
+                                $usedToSettleOutstanding     = $depositAmount;
+                                $depositAmount               = 0;
+                            }
+                        }
+
+                        $wallet->deposit_balance += $depositAmount;
+                        $wallet->save();
+
+                        WalletTransaction::create([
+                            'wallet_id'        => $wallet->id,
+                            'payment_id'       => $payment->id,
+                            'transaction_type' => 'CREDIT',
+                            'amount'           => $payment->amount_payable,
+                            'balance_before'   => $beforeBalance,
+                            'balance_after'    => $wallet->deposit_balance,
+                            'description'      => 'Patient deposit',
+                            'meta'             => json_encode([
+                                'original_deposit'             => (float) $payment->amount_payable,
+                                'used_to_settle_outstanding'   => $usedToSettleOutstanding,
+                                'credited_to_deposit_balance'  => $depositAmount,
+                            ]),
+                        ]);
+                    }
+
+                    // ----------------------------------------------------------------
+                    // WALLET — debit wallet, track outstanding if insufficient
+                    // ----------------------------------------------------------------
+                    if ($request->payment_method === 'WALLET') {
+                        $wallet        = $payment->patient->wallet;
+                        $beforeBalance = (float) $wallet->deposit_balance;
+                        $amountPayable = (float) $payment->amount_payable;
+
+                        if ($beforeBalance < $amountPayable) {
+                            $outstanding                 = $amountPayable - $beforeBalance;
+                            $wallet->deposit_balance     = 0;
+                            $wallet->outstanding_balance = ($wallet->outstanding_balance ?? 0) + $outstanding;
+                            $afterBalance                = 0;
+                        } else {
+                            $wallet->deposit_balance -= $amountPayable;
+                            $afterBalance             = $wallet->deposit_balance;
+                        }
+
+                        $wallet->save();
+
+                        WalletTransaction::create([
+                            'wallet_id'        => $wallet->id,
+                            'payment_id'       => $payment->id,
+                            'transaction_type' => 'DEBIT',
+                            'amount'           => $amountPayable,
+                            'balance_before'   => $beforeBalance,
+                            'balance_after'    => $afterBalance,
+                            'description'      => 'Wallet debit for payment',
+                        ]);
+                    }
+
+                    // ----------------------------------------------------------------
+                    // HMO — validate patient is linked to the selected org
+                    // Note: No amount split in bulk (use amount_payable as-is)
+                    // ----------------------------------------------------------------
+                    if ($request->payment_method === 'HMO') {
+                        $patientHmoId = $payment->patient->organisationHmo?->id;
+
+                        if (!$patientHmoId || $request->hmo_id != $patientHmoId) {
+                            $failed[] = [
+                                'id'      => $payment->id,
+                                'message' => 'Patient is not linked to the selected organization.',
+                            ];
+                            continue;
+                        }
+
+                        $insuranceProvider = OrganisationAndHmo::find($request->hmo_id);
+                        if (!$insuranceProvider) {
+                            $failed[] = [
+                                'id'      => $payment->id,
+                                'message' => 'Organization detail not found.',
+                            ];
+                            continue;
+                        }
+
+                        $payment->hmo_id = $insuranceProvider->id;
+                    }
+
+                    // ----------------------------------------------------------------
+                    // TRANSFER — shared reference across the batch
+                    // ----------------------------------------------------------------
+                    if ($request->payment_method === 'TRANSFER') {
+                        $payment->reference        = $request->transfer_reference;
+                        $payment->bank_transfer_to = $request->bank_transfer_to;
+                        $payment->transfer_charges = $request->transfer_charges ?? 0;
+                    }
+
+                    // ----------------------------------------------------------------
+                    // Payment history entry
+                    // ----------------------------------------------------------------
+                    $existingHistory = is_array($payment->history)
+                        ? $payment->history
+                        : json_decode($payment->history ?? '[]', true);
+
+                    $payment->history = array_merge($existingHistory, [
+                        ['date' => now(), 'title' => PaymentStatus::COMPLETED],
+                        [
+                            'date'             => now(),
+                            'title'            => 'CONFIRMED',
+                            'confirmed_by'     => "$staff->name ($staff->staff_number)",
+                            'transfer_charges' => $request->payment_method === 'TRANSFER'
+                                ? (float) $request->transfer_charges
+                                : null,
+                        ],
+                    ]);
+
+                    // ----------------------------------------------------------------
+                    // Finalise payment record
+                    // ----------------------------------------------------------------
+                    $payment->status         = PaymentStatus::COMPLETED->value;
+                    $payment->payment_method = $request->payment_method;
+                    $payment->remark         = $request->remark;
+                    $payment->lastUpdatedBy()->associate($staff);
+                    $payment->confirmedBy()->associate($staff);
+                    $payment->save();
+
+                    // ----------------------------------------------------------------
+                    // ProductSales polymorphic update
+                    // ----------------------------------------------------------------
+                    if ($payment->payable_type === ProductSales::class && $payment->payable_id) {
+                        ProductSales::where('id', $payment->payable_id)->update([
+                            'payment_id'       => $payment->id,
+                            'status'           => 'PAID',
+                            'confirmed_by_id'  => $staff->id,
+                        ]);
+
+                        $sale = ProductSales::find($payment->payable_id);
+                        if ($sale) {
+                            $saleHistory   = is_array($sale->history) ? $sale->history : json_decode($sale->history ?? '[]', true);
+                            $saleHistory[] = [
+                                'date'       => now(),
+                                'action'     => 'PAYMENT_CONFIRMED',
+                                'staff'      => "$staff->name ($staff->staff_number)",
+                                'payment_id' => $payment->id,
+                                'amount'     => $payment->amount_payable,
+                            ];
+                            $sale->history = $saleHistory;
+                            $sale->save();
+                        }
+                    }
+
+                    if ($payment->type === 'PHARMACY' && $payment->payable_type !== ProductSales::class) {
+                        $possibleSales = ProductSales::where('invoice_id', $payment->invoice_id)->get();
+                        foreach ($possibleSales as $ps) {
+                            $ps->payment_id      = $payment->id;
+                            $ps->status          = 'PAID';
+                            $ps->confirmed_by_id = $staff->id;
+                            $ps->save();
+                        }
+                    }
+
+                    $results[] = $payment->id;
+                }
+
+                return response()->json([
+                    'message'      => "Successfully marked " . count($results) . " payment(s) as paid.",
+                    'updated_ids'  => $results,
+                    'failed'       => $failed, // partial failures reported back to frontend
+                    'success'      => true,
+                ]);
+            });
+        } catch (Exception $th) {
+            Log::error($th->getMessage());
+
+            return response()->json([
+                'message' => 'Something went wrong. Try again in 5 minutes.',
+                'status'  => 'error',
+                'success' => false,
+            ], 500);
+        }
+    }
+
+
+    // public function bulkMarkAsPaid(Request $request)
+    // {
+    //     $request->validate([
+    //         'ids'   => ['required', 'array', 'min:1', 'max:10'],
+    //         'ids.*' => ['required', 'integer', 'exists:payments,id'],
+    //     ]);
+
+    //     $payments = Payment::whereIn('id', $request->ids)
+    //         ->where('status', '!=', 'COMPLETED')
+    //         ->get();
+
+    //     if ($payments->isEmpty()) {
+    //         return response()->json([
+    //             'message' => 'No eligible payments found. They may already be completed.',
+    //         ], 422);
+    //     }
+
+    //     $payments->each(fn($payment) => $payment->update(['status' => 'COMPLETED']));
+
+    //     return response()->json([
+    //         'message' => "Successfully marked {$payments->count()} payment(s) as paid.",
+    //         'updated_ids' => $payments->pluck('id'),
+    //     ]);
+    // }
+
+
+    // public function markAsPaid(string $id, Request $request)
+    // {
+    //     $request->validate([
+    //         'payment_method' => [
+    //             'required',
+    //             Rule::in(['WALLET', 'TRANSFER', 'HMO', 'CASH']),
+    //         ],
+    //         'amount' => [
+    //             'nullable',
+    //             'numeric',
+    //             'min:0'
+    //         ],
+    //         'remark' => ['nullable', 'string'],
+    //         'hmo_id' => [
+    //             'exclude_unless:payment_method,HMO',
+    //             'integer',
+    //         ],
+    //         'transfer_reference' => [
+    //             'exclude_unless:payment_method,TRANSFER',
+    //             'unique:payments,transaction_reference',
+    //             'string',
+    //         ],
+    //         'bank_transfer_to' => [
+    //             'exclude_unless:payment_method,TRANSFER',
+    //             'string',
+    //         ],
+    //         'transfer_charges' => [
+    //             'exclude_unless:payment_method,TRANSFER',
+    //             'numeric',
+    //             'min:0'
+    //         ],
+    //     ]);
+
+
+    //     try {
+    //         $staff = Auth::user();
+
+    //         return DB::transaction(function () use ($id, $staff, $request) {
+    //             $payment = Payment::with(['patient.wallet', 'patient.organisationHmo'])->find($id);
+
+    //             if (!$payment) {
+    //                 return response()->json([
+    //                     'message' => 'The payment detail not found',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             if ($payment->status == PaymentStatus::COMPLETED->value) {
+    //                 return response()->json([
+    //                     'message' => 'The payment already marked as paid',
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+
+    //             // Handle inventory update if payment is for a pharmacy
+    //             // if ($payment->type === "PHARMACY") {
+    //             //     $saleRecord = ProductSales::with(['payment', 'salesItems.product'])
+    //             //         ->whereHas('payment', fn($q) => $q->where('id', $id))
+    //             //         ->first();
+
+    //             //     if ($saleRecord) {
+    //             //         foreach ($saleRecord->salesItems as $item) {
+    //             //             if ($item->product) {
+    //             //                 $item->product->quantity_sold += $item->quantity_sold;
+    //             //                 $item->product->quantity_available_for_sales -= $item->quantity_sold;
+    //             //                 $item->product->save();
+    //             //             }
+    //             //         }
+    //             //     }
+    //             // }
+
+    //             if ($payment->type === "PHARMACY") {
+    //                 $saleRecord = ProductSales::with(['payment', 'salesItems'])
+    //                     ->whereHas('payment', fn($q) => $q->where('id', $id))
+    //                     ->first();
+
+    //                 if ($saleRecord) {
+    //                     foreach ($saleRecord->salesItems as $item) {
+    //                         if (!$item->product_id) {
+    //                             continue; // skip if product not linked
+    //                         }
+
+    //                         // Lock the product row to avoid race conditions
+    //                         $product = Product::where('id', $item->product_id)->lockForUpdate()->first();
+
+    //                         if (!$product) {
+    //                             return response()->json([
+    //                                 'message' => "Product not found for sales",
+    //                                 'status' => 'error',
+    //                                 'success' => false,
+    //                             ], 400);
+    //                         }
+
+    //                         // Check if there's enough stock
+    //                         if ($product->quantity_available_for_sales < $item->quantity_sold) {
+    //                             return response()->json([
+    //                                 'message' => "Insufficient stock for {$product->brand_name}. Available Quantity on Sales: {$product->quantity_available_for_sales}",
+    //                                 'status' => 'error',
+    //                                 'success' => false,
+    //                             ], 400);
+    //                         }
+
+    //                         // Perform the update safely
+    //                         $product->quantity_sold += $item->quantity_sold;
+    //                         $product->quantity_available_for_sales -= $item->quantity_sold;
+    //                         $product->save();
+    //                     }
+
+    //                     $existingHistory = is_array($saleRecord->history)
+    //                         ? $saleRecord->history
+    //                         : json_decode($saleRecord->history ?? '[]', true);
+
+    //                     $saleRecord->history = array_merge($existingHistory, [
+    //                         [
+    //                             'date' => now(),
+    //                             'action' => 'PAYMENT_COMPLETED',
+    //                             'staff' => "$staff->name ($staff->staff_number)",
+    //                             'reference' => $payment->transaction_reference,
+    //                             'amount' => $payment->amount_payable,
+    //                         ]
+    //                     ]);
+
+    //                     $saleRecord->save();
+    //                 }
+    //             }
+
+    //             // Handle deposit wallet logic
+    //             if ($payment->type == 'DEPOSIT') {
+    //                 $wallet = $payment->patient->wallet;
+    //                 $beforeBalance = (float) $wallet->deposit_balance;
+    //                 $depositAmount = (float) $payment->amount_payable;
+    //                 $outstanding = (float) ($wallet->outstanding_balance ?? 0);
+
+    //                 $usedToSettleOutstanding = 0;
+
+    //                 if ($outstanding > 0) {
+    //                     if ($depositAmount >= $outstanding) {
+    //                         $depositAmount -= $outstanding;
+    //                         $usedToSettleOutstanding = $outstanding;
+    //                         $wallet->outstanding_balance = 0;
+    //                     } else {
+    //                         $wallet->outstanding_balance -= $depositAmount;
+    //                         $usedToSettleOutstanding = $depositAmount;
+    //                         $depositAmount = 0;
+    //                     }
+    //                 }
+
+    //                 $wallet->deposit_balance += $depositAmount;
+    //                 $wallet->save();
+    //                 $payment->save();
+
+    //                 WalletTransaction::create([
+    //                     'wallet_id' => $wallet->id,
+    //                     'payment_id' => $payment->id ?? null,
+    //                     'transaction_type' => 'CREDIT',
+    //                     'amount' => $payment->amount_payable,
+    //                     'balance_before' => $beforeBalance,
+    //                     'balance_after' => $wallet->deposit_balance,
+    //                     'description' => 'Patient deposit',
+    //                     'meta' => json_encode([
+    //                         'original_deposit' => (float) $payment->amount_payable,
+    //                         'used_to_settle_outstanding' => $usedToSettleOutstanding,
+    //                         'credited_to_deposit_balance' => $depositAmount,
+    //                     ]),
+    //                 ]);
+    //             }
+
+    //             // Wallet debit
+    //             if ($payment->patient && $request->payment_method == 'WALLET') {
+    //                 $wallet = $payment->patient->wallet;
+    //                 $beforeBalance = (float) $wallet->deposit_balance;
+    //                 $amountPayable = (float) $payment->amount_payable;
+
+    //                 if ($beforeBalance < $amountPayable) {
+    //                     $outstanding = $amountPayable - $beforeBalance;
+    //                     $wallet->deposit_balance = 0;
+    //                     $wallet->outstanding_balance = ($wallet->outstanding_balance ?? 0) + $outstanding;
+    //                     $afterBalance = 0;
+    //                 } else {
+    //                     $wallet->deposit_balance -= $amountPayable;
+    //                     $afterBalance = $wallet->deposit_balance;
+    //                 }
+
+    //                 $wallet->save();
+
+    //                 WalletTransaction::create([
+    //                     'wallet_id' => $wallet->id,
+    //                     'payment_id' => $payment->id,
+    //                     'transaction_type' => 'DEBIT',
+    //                     'amount' => $amountPayable,
+    //                     'balance_before' => $beforeBalance,
+    //                     'balance_after' => $afterBalance,
+    //                     'description' => 'Wallet debit for payment',
+    //                 ]);
+    //             }
+
+    //             // HMO verification and association
+    //             // if ($request->payment_method == 'HMO') {
+    //             //     Log::info($payment->patient);
+    //             //     $patientHmoId = $payment->patient->organisationHmo->id;
+
+    //             //     if (!$patientHmoId || $request->hmo_id != $patientHmoId) {
+    //             //         return response()->json([
+    //             //             'message' => "The patient is not linked to the selected organization",
+    //             //             'status' => 'error',
+    //             //             'success' => false,
+    //             //         ], 400);
+    //             //     }
+
+    //             //     $insuranceProvider = OrganisationAndHmo::find($request->hmo_id);
+    //             //     if (!$insuranceProvider) {
+    //             //         return response()->json([
+    //             //             'message' => 'Organization Detail not found',
+    //             //             'status' => 'error',
+    //             //             'success' => false,
+    //             //         ], 400);
+    //             //     }
+
+    //             //     $payment->hmo_id = $insuranceProvider->id;
+    //             // }
+    //             if ($request->payment_method == 'HMO') {
+    //                 Log::info("$payment");
+    //                 $patientHmoId = $payment->patient->organisationHmo?->id;
+
+    //                 if (!$patientHmoId || $request->hmo_id != $patientHmoId) {
+    //                     return response()->json([
+    //                         'message' => "The patient is not linked to the selected organization",
+    //                         'status' => 'error',
+    //                         'success' => false,
+    //                     ], 400);
+    //                 }
+
+    //                 $insuranceProvider = OrganisationAndHmo::find($request->hmo_id);
+    //                 if (!$insuranceProvider) {
+    //                     return response()->json([
+    //                         'message' => 'Organization Detail not found',
+    //                         'status' => 'error',
+    //                         'success' => false,
+    //                     ], 400);
+    //                 }
+
+    //                 $payment->hmo_id = $insuranceProvider->id;
+
+    //                 if ($request->amount !== null) {
+    //                     $requestedHmoAmount = (float) $request->amount;
+    //                     $totalAmount = (float) $payment->amount;
+
+    //                     Log::info("Request Amount: $requestedHmoAmount, Payment amount payable: $totalAmount");
+
+    //                     if ($requestedHmoAmount > $totalAmount) {
+    //                         return response()->json([
+    //                             'message' => 'Requested amount cannot exceed the total amount for the service.',
+    //                             'status' => 'error',
+    //                             'success' => false,
+    //                         ], 400);
+    //                     }
+
+    //                     // Update the HMO portion
+    //                     $payment->amount_payable = number_format($requestedHmoAmount, 2, '.', '');
+    //                     $payment->last_updated_by_id = $staff->id;
+
+    //                     // Calculate expected patient portion
+    //                     $expectedPatientBalance = $totalAmount - $requestedHmoAmount;
+
+    //                     // Get existing child payments
+    //                     $childPayments = Payment::where('parent_id', $payment->id)->get();
+    //                     $totalAlreadyAccountedFor = $childPayments->sum(function ($p) {
+    //                         return (float) $p->amount_payable;
+    //                     });
+
+    //                     if ($totalAlreadyAccountedFor > $expectedPatientBalance) {
+    //                         return response()->json([
+    //                             'message' => 'Patient has already paid more than the expected balance. Please review payments manually.',
+    //                             'status' => 'error',
+    //                             'success' => false,
+    //                         ], 400);
+    //                     }
+
+    //                     $newBalanceToBePaid = $expectedPatientBalance - $totalAlreadyAccountedFor;
+
+    //                     if ($newBalanceToBePaid > 0) {
+    //                         $newPayment = new Payment();
+    //                         $newPayment->amount = number_format($newBalanceToBePaid, 2, '.', '');
+    //                         $newPayment->amount_payable = number_format($newBalanceToBePaid, 2, '.', '');
+    //                         $newPayment->transaction_reference = strtoupper(Str::random(10));
+    //                         $newPayment->type = $payment->type;
+    //                         $newPayment->status = 'CREATED';
+    //                         $newPayment->customer_name = $payment->customer_name;
+    //                         $newPayment->payable_id = $payment->payable_id;
+    //                         $newPayment->payable_type = $payment->payable_type;
+    //                         $newPayment->patient_id = $payment->patient_id;
+    //                         $newPayment->parent_id = $payment->id;
+    //                         $newPayment->added_by_id = $staff->id;
+    //                         $newPayment->last_updated_by_id = $staff->id;
+    //                         $newPayment->save();
+    //                     }
+    //                 }
+    //             }
+
+
+    //             // handle transfer payment
+    //             // if ($request->payment_method == 'TRANSFER') {
+    //             //     $payment->transaction_reference = $request->transfer_reference;
+    //             //     $payment->bank_transfer_to = $request->bank_transfer_to;
+    //             // }
+    //             // handle transfer payment
+    //             if ($request->payment_method == 'TRANSFER') {
+    //                 $payment->reference = $request->transfer_reference;
+    //                 $payment->bank_transfer_to = $request->bank_transfer_to;
+    //                 $payment->transfer_charges = $request->transfer_charges ?? 0;
+    //             }
+
+    //             $existingHistory = is_array($payment->history)
+    //                 ? $payment->history
+    //                 : json_decode($payment->history ?? '[]', true);
+
+    //             $payment->history = array_merge($existingHistory, [
+    //                 ['date' => now(), 'title' => PaymentStatus::COMPLETED],
+    //                 [
+    //                     'date' => now(),
+    //                     'title' => 'CONFIRMED',
+    //                     'confirmed_by' => "$staff->name ($staff->staff_number)",
+    //                     'transfer_charges' => $request->payment_method == 'TRANSFER' ? (float) $request->transfer_charges : null,
+    //                 ],
+    //             ]);
+
+    //             $payment->status = PaymentStatus::COMPLETED;
+    //             $payment->payment_method = $request->payment_method;
+    //             $payment->lastUpdatedBy()->associate($staff);
+    //             $payment->confirmedBy()->associate($staff);
+    //             $payment->remark = $request->remark;
+    //             $payment->save();
+
+    //             return response()->json([
+    //                 'message' => 'Payment marked as paid successfully',
+    //                 'status' => 'success',
+    //                 'success' => true,
+    //             ]);
+    //         });
+    //     } catch (Exception $th) {
+    //         Log::info($th->getMessage());
+
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
 
     public function markAsUnPaid($id)
     {

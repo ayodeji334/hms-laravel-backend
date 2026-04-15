@@ -337,7 +337,7 @@ class LabTestResultTemplateController extends Controller
                     LabTestTemplateTableColumn::create([
                         'table_id' => $table->id,
                         'header' => $column['header'] ?? '',
-                        'sub_columns' => $column['subColumns'],
+                        'sub_columns' => $column['sub_columns'],
                         'index' => $index,
                     ]);
                 }
