@@ -104,8 +104,11 @@
         </tr> --}}
         <tr>
             <td class="label">Patient Name:</td>
-            <td class="value">{{ $patient['firstname'] ?? 'N/A' }}</td>
+            <td class="value">
+                {{ ($patient['firstname'] ?? '') . ' ' . ($patient['lastname'] ?? '') ?: 'N/A' }}
+            </td>
         </tr>
+
         <tr>
             <td class="label">Reg No:</td>
             <td class="value">{{ $patient['patient_reg_no'] ?? 'N/A' }}</td>
@@ -131,11 +134,11 @@
             <tr>
                 <td>
                     <div class="bold">{{ $payment['type'] ?? 'Payment' }}</div>
-                    <div style="font-size:8px; color:#444">
+                    <div style="font-size:8px; color:#444;font-weight:700">
                         Ref: {{ $payment['transaction_reference'] ?? 'N/A' }}
                     </div>
                     @if(!empty($payment['status']))
-                        <div style="font-size:8px;">
+                        <div style="font-size:7px;">
                             {{ strtoupper($payment['status']) }}
                         </div>
                     @endif
