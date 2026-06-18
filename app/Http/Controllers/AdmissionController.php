@@ -359,7 +359,7 @@ class AdmissionController extends Controller
                 'addedBy',
                 'treatments',
                 'recommendedTests.service',
-                'recommendedTests.testResult',
+                'recommendedTests.diagnosticResults',
                 'bed.room.category',
                 'prescriptions',
                 'prescriptions.requestedBy',

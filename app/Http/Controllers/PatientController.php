@@ -930,8 +930,10 @@ class PatientController extends Controller
                 ->labRequests()
                 ->with([
                     'addedBy',
-                    'testResult.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
-                    'testResult.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number'
+                    'service:id,name,price,type',
+                    'diagnosticResults.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
+                    'diagnosticResults.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number',
+                    'diagnosticResults.test:id,name,type,price,is_available'
                 ])
                 ->paginate($perPage);
 

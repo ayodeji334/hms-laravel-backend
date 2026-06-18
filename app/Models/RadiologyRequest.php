@@ -13,20 +13,26 @@ class RadiologyRequest extends Model
     protected $fillable = [
         'clinical_diagnosis',
         'part_examined',
-        'result_date',
+        'request_date',
         'size_of_films',
-        'test_id',
+        'service_id',        // fixed: was 'test_id' — relationship uses service_id
         'number_of_films',
-        'carried_out_by',
         'status',
-        'added_by',
-        'last_updated_by',
-        'request_id',
+        'added_by_id',       // fixed: was 'added_by'
+        'last_updated_by_id', // fixed: was 'last_updated_by'
+        'carried_out_by_id', // fixed: was 'carried_out_by'
         'payment_id',
+        'patient_id',
+        'treatment_id',      // added: used in createRecommendedTests
+        'customer_name',     // added: used in createRecommendedTests
+        'is_patient',        // added: used in createRecommendedTests
+        'is_urgent',         // added: radiology urgency flag
     ];
 
     protected $casts = [
-        'result_date' => 'date',
+        'request_date' => 'date',
+        'is_patient'   => 'boolean',
+        'is_urgent'    => 'boolean',
     ];
 
     public function service()
@@ -61,11 +67,11 @@ class RadiologyRequest extends Model
 
     public function patient()
     {
-        return $this->belongsTo(Patient::class);
+        return $this->belongsTo(Patient::class, 'patient_id'); // fixed: was empty string
     }
 
-    public function testResult()
+    public function diagnosticResults()
     {
-        return $this->hasOne(DiagnosticTestResult::class, 'request_id');
+        return $this->morphMany(DiagnosticTestResult::class, 'requestable');
     }
 }

@@ -10,12 +10,14 @@ use App\Models\LabRequest;
 use App\Models\Patient;
 use App\Models\Payment;
 use App\Models\Prescription;
+use App\Models\RadiologyRequest;
 use App\Models\Service;
 use App\Models\Treatment;
 use App\Models\User;
 use App\Models\Visitation;
 use Carbon\Carbon;
 use Exception;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -492,9 +494,11 @@ class VisitationController extends Controller
                 ->with('service') // eager load service details
                 ->with([
                     'addedBy',
-                    'testResult.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
-                    'testResult.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number'
-                ])
+                    'service:id,name,price,type',
+                    'diagnosticResults.test:id,name,type',
+                    'diagnosticResults.addedBy:id,firstname,lastname,gender,staff_number,phone_number',
+                    'diagnosticResults.resultCarriedOutBy:id,firstname,lastname,gender,staff_number,phone_number'
+                ])->orderBy('created_at', 'desc')
                 ->paginate($perPage);
 
             return response()->json([
@@ -683,14 +687,14 @@ class VisitationController extends Controller
                 'patient.labRequests',
                 'patient.wallet',
                 'patient.organisationHmo:id,name,type,phone_number',
-                'patient.labRequests.testResult',
+                'patient.labRequests.diagnosticResults',
                 'patient.labRequests.service',
                 'patient.vitalSigns',
                 'patient.treatments.createdBy.assignedBranch',
                 'assignedDoctor.assignedBranch',
                 'physicalExaminations',
-                'recommendedTests.service',
-                'recommendedTests.testResult',
+                // 'recommendedTests.service',
+                // 'recommendedTests.diagnosticResults',
                 'treatment.patient',
                 'prescriptions',
                 'payment:id,status',
@@ -1477,60 +1481,461 @@ class VisitationController extends Controller
     //     }
     // }
 
+    // public function createRecommendedTests(Request $request, $id)
+    // {
+    //     $validated = $request->validate([
+    //         'treatment_id' => 'required|exists:treatments,id',
+    //         'recommended_tests' => 'required|array|min:1',
+    //         'recommended_tests.*' => 'required|exists:services,id',
+    //     ], [
+    //         'treatment_id.required' => 'A treatment must be selected.',
+    //         'treatment_id.exists' => 'The selected treatment does not exist.',
+    //         'recommended_tests.required' => 'The recommended tests field is required.',
+    //         'recommended_tests.array' => 'The recommended tests must be an array.',
+    //         'recommended_tests.min' => 'At least one test must be provided.',
+    //         'recommended_tests.*.required' => 'Test entry cannot be empty.',
+    //         'recommended_tests.*.exists' => 'One or more tests are invalid.',
+    //     ]);
+
+    //     try {
+    //         $staff = Auth::user();
+
+    //         // Load treatment and determine which parent it belongs to
+    //         $treatment = Treatment::with(['visitation.patient', 'admission.patient'])->find($validated['treatment_id']);
+
+    //         if (!$treatment) {
+    //             throw new BadRequestHttpException('Treatment not found.');
+    //         }
+
+    //         // Determine context by matching the provided $id to treatment's visitation_id or admission_id
+    //         $isVisitation = $treatment->visitation_id && (string)$treatment->visitation_id === (string)$id;
+    //         $isAdmission  = $treatment->admission_id  && (string)$treatment->admission_id  === (string)$id;
+
+    //         if (!$isVisitation && !$isAdmission) {
+    //             throw new BadRequestHttpException('The selected treatment does not belong to the provided visitation/admission id.');
+    //         }
+
+    //         // Resolve context model and patient
+    //         $context = null;
+    //         $patient = null;
+    //         if ($isVisitation) {
+    //             $context = $treatment->visitation;
+    //             $patient = $context->patient;
+    //             // Status restrictions apply only for visitations
+    //             if (in_array($context->status, [
+    //                 VisitationStatus::CONSULTED->value,
+    //                 VisitationStatus::CANCELLED->value,
+    //                 VisitationStatus::RESCHEDULE->value
+    //             ])) {
+    //                 return response()->json([
+    //                     'message' => "You cannot add tests because this visitation has already been {$context->status->value}.",
+    //                     'status' => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+    //         } else {
+    //             $context = $treatment->admission;
+    //             $patient = $context->patient;
+    //         }
+
+    //         if (!$patient) {
+    //             throw new BadRequestHttpException('Patient for the selected context not found.');
+    //         }
+
+    //         // Validate tests exist
+    //         $tests = Service::whereIn('id', $validated['recommended_tests'])->get();
+    //         Log::info($tests);
+    //         $foundIds = $tests->pluck('id')->all();
+    //         $notFound = array_values(array_diff($validated['recommended_tests'], $foundIds));
+    //         if (count($notFound) > 0) {
+    //             return response()->json([
+    //                 'message' => 'Some recommended tests were not found.',
+    //                 'status' => 'error',
+    //                 'success' => false,
+    //                 'not_found_tests' => $notFound,
+    //             ], 400);
+    //         }
+
+    //         DB::beginTransaction();
+
+    //         $requests = [];
+    //         foreach ($tests as $test) {
+    //             $labRequest = LabRequest::create([
+    //                 'patient_id' => $patient->id,
+    //                 'is_patient' => true,
+    //                 'service_id' => $test->id,
+    //                 'priority' => 'URGENT',
+    //                 'is_approval_required' => false,
+    //                 'added_by_id' => $staff->id,
+    //                 'request_date' => Carbon::now(),
+    //                 'customer_name' => $patient->fullname,
+    //                 'treatment_id' => $treatment->id,
+    //             ]);
+
+    //             $payment = new Payment();
+    //             $payment->amount = number_format($test->price ?? 0, 3, '.', '');
+    //             $payment->amount_payable = round(number_format($test->price ?? 0, 3, '.', ''));
+    //             $payment->customer_name = $patient->fullname;
+    //             $payment->transaction_reference = strtoupper(Str::random(10));
+    //             $payment->patient_id = $patient->id ?? null;
+    //             $payment->payable_id = $labRequest->id;
+    //             $payment->payable_type = LabRequest::class;
+    //             $payment->added_by_id = $staff->id;
+    //             $payment->type = 'LAB-TEST';
+    //             $payment->history = [
+    //                 ['date' => now(), 'title' => 'CREATED'],
+    //             ];
+    //             $payment->last_updated_by_id = $staff->id;
+    //             $payment->save();
+
+    //             $requests[] = $labRequest;
+    //         }
+
+    //         // update context metadata and sync relation
+    //         $context->last_updated_by_id = $staff->id;
+    //         $context->save();
+
+    //         // If recommendedTests relation expects ids, pass ids; if it expects models, pass models.
+    //         // Adjust this line to match your relationship signature.
+    //         $context->recommendedTests()->sync(array_map(fn($r) => $r->id, $requests));
+
+    //         DB::commit();
+
+    //         return response()->json([
+    //             'message' => 'Recommended tests added successfully.',
+    //             'status' => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (BadRequestHttpException $e) {
+    //         Log::info('Error recommending tests: ' . $e->getMessage());
+    //         return response()->json([
+    //             'message' => $e->getMessage(),
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 400);
+    //     } catch (Exception $e) {
+    //         DB::rollBack();
+    //         Log::error('Unexpected error: ' . $e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again later.',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
+
+    // public function createRecommendedTests(Request $request, $id)
+    // {
+    //     $validated = $request->validate([
+    //         'treatment_id' => 'required|exists:treatments,id',
+    //         'recommended_tests' => 'required|array|min:1',
+    //         'recommended_tests.*' => 'required|exists:services,id',
+    //     ], [
+    //         'treatment_id.required' => 'A treatment must be selected.',
+    //         'treatment_id.exists' => 'The selected treatment does not exist.',
+    //         'recommended_tests.required' => 'The recommended tests field is required.',
+    //         'recommended_tests.array' => 'The recommended tests must be an array.',
+    //         'recommended_tests.min' => 'At least one test must be provided.',
+    //         'recommended_tests.*.required' => 'Test entry cannot be empty.',
+    //         'recommended_tests.*.exists' => 'One or more tests are invalid.',
+    //     ]);
+
+    //     try {
+    //         $staff = Auth::user();
+
+    //         $treatment = Treatment::with(['visitation.patient', 'admission.patient'])->find($validated['treatment_id']);
+
+    //         if (!$treatment) {
+    //             throw new BadRequestHttpException('Treatment not found.');
+    //         }
+
+    //         $isVisitation = $treatment->visitation_id && (string)$treatment->visitation_id === (string)$id;
+    //         $isAdmission  = $treatment->admission_id  && (string)$treatment->admission_id  === (string)$id;
+
+    //         if (!$isVisitation && !$isAdmission) {
+    //             throw new BadRequestHttpException('The selected treatment does not belong to the provided visitation/admission id.');
+    //         }
+
+    //         $context = null;
+    //         $patient = null;
+
+    //         if ($isVisitation) {
+    //             $context = $treatment->visitation;
+    //             $patient = $context->patient;
+    //             if (in_array($context->status, [
+    //                 VisitationStatus::CONSULTED->value,
+    //                 VisitationStatus::CANCELLED->value,
+    //                 VisitationStatus::RESCHEDULE->value,
+    //             ])) {
+    //                 return response()->json([
+    //                     'message' => "You cannot add tests because this visitation has already been {$context->status->value}.",
+    //                     'status'  => 'error',
+    //                     'success' => false,
+    //                 ], 400);
+    //             }
+    //         } else {
+    //             $context = $treatment->admission;
+    //             $patient = $context->patient;
+    //         }
+
+    //         if (!$patient) {
+    //             throw new BadRequestHttpException('Patient for the selected context not found.');
+    //         }
+
+    //         $tests    = Service::whereIn('id', $validated['recommended_tests'])->get();
+    //         $foundIds = $tests->pluck('id')->all();
+    //         $notFound = array_values(array_diff($validated['recommended_tests'], $foundIds));
+
+    //         if (count($notFound) > 0) {
+    //             return response()->json([
+    //                 'message'         => 'Some recommended tests were not found.',
+    //                 'status'          => 'error',
+    //                 'success'         => false,
+    //                 'not_found_tests' => $notFound,
+    //             ], 400);
+    //         }
+
+    //         DB::beginTransaction();
+
+    //         $requests = [];
+
+    //         foreach ($tests as $test) {
+    //             $isRadiology = $test->type === 'RADIOLOGY-TEST';
+
+    //             // Resolve the correct model and payment type based on service type
+    //             $testRequest = $isRadiology
+    //                 ? RadiologyRequest::create([
+    //                     'patient_id'           => $patient->id,
+    //                     'service_id'           => $test->id,
+    //                     'priority'             => 'URGENT',
+    //                     'is_approval_required' => false,
+    //                     'added_by_id'          => $staff->id,
+    //                     'request_date'         => Carbon::now(),
+    //                     'customer_name'        => $patient->fullname,
+    //                     'treatment_id'         => $treatment->id,
+    //                 ])
+    //                 : LabRequest::create([
+    //                     'patient_id'           => $patient->id,
+    //                     'is_patient'           => true,
+    //                     'service_id'           => $test->id,
+    //                     'priority'             => 'URGENT',
+    //                     'is_approval_required' => false,
+    //                     'added_by_id'          => $staff->id,
+    //                     'request_date'         => Carbon::now(),
+    //                     'customer_name'        => $patient->fullname,
+    //                     'treatment_id'         => $treatment->id,
+    //                 ]);
+
+    //             $paymentType = $isRadiology ? 'RADIOLOGY-TEST' : 'LAB-TEST';
+
+    //             $payment = new Payment();
+    //             $payment->amount                = number_format($test->price ?? 0, 3, '.', '');
+    //             $payment->amount_payable        = round(number_format($test->price ?? 0, 3, '.', ''));
+    //             $payment->customer_name         = $patient->fullname;
+    //             $payment->transaction_reference = strtoupper(Str::random(10));
+    //             $payment->patient_id            = $patient->id ?? null;
+    //             $payment->payable_id            = $testRequest->id;
+    //             $payment->payable_type          = $isRadiology ? RadiologyRequest::class : LabRequest::class;
+    //             $payment->added_by_id           = $staff->id;
+    //             $payment->type                  = $paymentType;
+    //             $payment->history               = [
+    //                 ['date' => now(), 'title' => 'CREATED'],
+    //             ];
+    //             $payment->last_updated_by_id    = $staff->id;
+    //             $payment->save();
+
+    //             // Attach a diagnostic result to the request
+    //             // $testRequest->diagnosticResults()->create([
+    //             //     'result_details'       => ['status' => 'pending'],
+    //             //     'result_date'          => Carbon::now(),
+    //             //     'patient_id'           => $patient->id,
+    //             //     'added_by_id'          => $staff->id,
+    //             //     'result_carried_out_by_id'          => $staff->id,
+    //             //     'last_updated_by_id'   => $staff->id,
+    //             //     'is_save_as_draft'     => true,
+    //             //     'test_id'     => $test->id,
+    //             // ]);
+
+    //             $requests[] = $testRequest;
+    //         }
+
+    //         $context->last_updated_by_id = $staff->id;
+    //         $context->save();
+
+    //         $context->recommendedTests()->sync(array_map(fn($r) => $r->id, $requests));
+
+    //         DB::commit();
+
+
+    //         // foreach ($tests as $test) {
+    //         //     $isRadiology = $test->type === 'RADIOLOGY-TEST';
+
+    //         //     // Resolve the correct model and payment type based on service type
+    //         //     $testRequest = $isRadiology
+    //         //         ? RadiologyRequest::create([
+    //         //             'patient_id'           => $patient->id,
+    //         //             'is_patient'           => true,
+    //         //             'service_id'           => $test->id,
+    //         //             'priority'             => 'URGENT',
+    //         //             'is_approval_required' => false,
+    //         //             'added_by_id'          => $staff->id,
+    //         //             'request_date'         => Carbon::now(),
+    //         //             'customer_name'        => $patient->fullname,
+    //         //             'treatment_id'         => $treatment->id,
+    //         //         ])
+    //         //         : LabRequest::create([
+    //         //             'patient_id'           => $patient->id,
+    //         //             'is_patient'           => true,
+    //         //             'service_id'           => $test->id,
+    //         //             'priority'             => 'URGENT',
+    //         //             'is_approval_required' => false,
+    //         //             'added_by_id'          => $staff->id,
+    //         //             'request_date'         => Carbon::now(),
+    //         //             'customer_name'        => $patient->fullname,
+    //         //             'treatment_id'         => $treatment->id,
+    //         //         ]);
+
+    //         //     $paymentType = $isRadiology ? 'RADIOLOGY-TEST' : 'LAB-TEST';
+
+    //         //     $payment = new Payment();
+    //         //     $payment->amount                = number_format($test->price ?? 0, 3, '.', '');
+    //         //     $payment->amount_payable        = round(number_format($test->price ?? 0, 3, '.', ''));
+    //         //     $payment->customer_name         = $patient->fullname;
+    //         //     $payment->transaction_reference = strtoupper(Str::random(10));
+    //         //     $payment->patient_id            = $patient->id ?? null;
+    //         //     $payment->payable_id            = $testRequest->id;
+    //         //     $payment->payable_type          = $isRadiology ? RadiologyRequest::class : LabRequest::class;
+    //         //     $payment->added_by_id           = $staff->id;
+    //         //     $payment->type                  = $paymentType;
+    //         //     $payment->history               = [
+    //         //         ['date' => now(), 'title' => 'CREATED'],
+    //         //     ];
+    //         //     $payment->last_updated_by_id    = $staff->id;
+    //         //     $payment->save();
+
+    //         //     $requests[] = $testRequest;
+    //         // }
+
+    //         // $context->last_updated_by_id = $staff->id;
+    //         // $context->save();
+
+    //         // $context->recommendedTests()->sync(array_map(fn($r) => $r->id, $requests));
+
+    //         // DB::commit();
+
+    //         return response()->json([
+    //             'message' => 'Recommended tests added successfully.',
+    //             'status'  => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (BadRequestHttpException $e) {
+    //         Log::info('Error recommending tests: ' . $e->getMessage());
+    //         return response()->json([
+    //             'message' => $e->getMessage(),
+    //             'status'  => 'error',
+    //             'success' => false,
+    //         ], 400);
+    //     } catch (Exception $e) {
+    //         DB::rollBack();
+    //         Log::error('Unexpected error: ' . $e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again later.',
+    //             'status'  => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
+
+    public function getPreviousLabRequests(Request $request, $visitationId)
+    {
+        try {
+            $perPage = $request->get('per_page', 10);
+            // Find the visitation
+            $visitation = Visitation::findOrFail($visitationId);
+
+            // Get all lab requests for the same patient before visitation creation
+            $labRequests = LabRequest::with(['service', 'payment', 'patient'])
+                ->where('patient_id', $visitation->patient_id)
+                ->where('created_at', '<', $visitation->created_at)
+                ->orderBy('created_at', 'desc')
+                ->paginate($perPage);;
+
+            return response()->json([
+                'message' => 'Previous lab requests retrieved successfully.',
+                'status'  => 'success',
+                'success' => true,
+                'data'    => $labRequests,
+            ]);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'message' => 'Visitation not found.',
+                'status'  => 'error',
+                'success' => false,
+            ], 400);
+        } catch (Exception $e) {
+            Log::error('Error fetching previous lab requests: ' . $e->getMessage());
+            return response()->json([
+                'message' => 'Something went wrong. Try again later.',
+                'status'  => 'error',
+                'success' => false,
+            ], 500);
+        }
+    }
+
+
     public function createRecommendedTests(Request $request, $id)
     {
         $validated = $request->validate([
-            'treatment_id' => 'required|exists:treatments,id',
-            'recommended_tests' => 'required|array|min:1',
-            'recommended_tests.*' => 'required|exists:services,id',
+            'treatment_id'          => 'required|exists:treatments,id',
+            'recommended_tests'     => 'required|array|min:1',
+            'recommended_tests.*'   => 'required|exists:services,id',
         ], [
-            'treatment_id.required' => 'A treatment must be selected.',
-            'treatment_id.exists' => 'The selected treatment does not exist.',
-            'recommended_tests.required' => 'The recommended tests field is required.',
-            'recommended_tests.array' => 'The recommended tests must be an array.',
-            'recommended_tests.min' => 'At least one test must be provided.',
-            'recommended_tests.*.required' => 'Test entry cannot be empty.',
-            'recommended_tests.*.exists' => 'One or more tests are invalid.',
+            'treatment_id.required'         => 'A treatment must be selected.',
+            'treatment_id.exists'           => 'The selected treatment does not exist.',
+            'recommended_tests.required'    => 'The recommended tests field is required.',
+            'recommended_tests.array'       => 'The recommended tests must be an array.',
+            'recommended_tests.min'         => 'At least one test must be provided.',
+            'recommended_tests.*.required'  => 'Test entry cannot be empty.',
+            'recommended_tests.*.exists'    => 'One or more tests are invalid.',
         ]);
 
         try {
             $staff = Auth::user();
 
-            // Load treatment and determine which parent it belongs to
-            $treatment = Treatment::with(['visitation.patient', 'admission.patient'])->find($validated['treatment_id']);
+            $treatment = Treatment::with(['visitation.patient', 'admission.patient'])
+                ->find($validated['treatment_id']);
 
             if (!$treatment) {
                 throw new BadRequestHttpException('Treatment not found.');
             }
 
-            // Determine context by matching the provided $id to treatment's visitation_id or admission_id
-            $isVisitation = $treatment->visitation_id && (string)$treatment->visitation_id === (string)$id;
-            $isAdmission  = $treatment->admission_id  && (string)$treatment->admission_id  === (string)$id;
+            $isVisitation = $treatment->visitation_id && (string) $treatment->visitation_id === (string) $id;
+            $isAdmission  = $treatment->admission_id  && (string) $treatment->admission_id  === (string) $id;
 
             if (!$isVisitation && !$isAdmission) {
                 throw new BadRequestHttpException('The selected treatment does not belong to the provided visitation/admission id.');
             }
 
-            // Resolve context model and patient
             $context = null;
             $patient = null;
+
             if ($isVisitation) {
-                $context = $treatment->visitation; // eager loaded relation
+                $context = $treatment->visitation;
                 $patient = $context->patient;
-                // Status restrictions apply only for visitations
+
                 if (in_array($context->status, [
                     VisitationStatus::CONSULTED->value,
                     VisitationStatus::CANCELLED->value,
-                    VisitationStatus::RESCHEDULE->value
+                    VisitationStatus::RESCHEDULE->value,
                 ])) {
                     return response()->json([
                         'message' => "You cannot add tests because this visitation has already been {$context->status->value}.",
-                        'status' => 'error',
+                        'status'  => 'error',
                         'success' => false,
                     ], 400);
                 }
             } else {
-                $context = $treatment->admission; // eager loaded relation
+                $context = $treatment->admission;
                 $patient = $context->patient;
             }
 
@@ -1538,15 +1943,15 @@ class VisitationController extends Controller
                 throw new BadRequestHttpException('Patient for the selected context not found.');
             }
 
-            // Validate tests exist
-            $tests = Service::whereIn('id', $validated['recommended_tests'])->get();
+            $tests    = Service::whereIn('id', $validated['recommended_tests'])->get();
             $foundIds = $tests->pluck('id')->all();
             $notFound = array_values(array_diff($validated['recommended_tests'], $foundIds));
+
             if (count($notFound) > 0) {
                 return response()->json([
-                    'message' => 'Some recommended tests were not found.',
-                    'status' => 'error',
-                    'success' => false,
+                    'message'         => 'Some recommended tests were not found.',
+                    'status'          => 'error',
+                    'success'         => false,
                     'not_found_tests' => $notFound,
                 ], 400);
             }
@@ -1554,58 +1959,60 @@ class VisitationController extends Controller
             DB::beginTransaction();
 
             $requests = [];
+
             foreach ($tests as $test) {
-                $labRequest = LabRequest::create([
-                    'patient_id' => $patient->id,
-                    'is_patient' => true,
-                    'service_id' => $test->id,
-                    'priority' => 'URGENT',
+                // All requests stored as LabRequest — service type drives payment type
+                $testRequest = LabRequest::create([
+                    'patient_id'           => $patient->id,
+                    'is_patient'           => true,
+                    'service_id'           => $test->id,
+                    'priority'             => 'URGENT',
                     'is_approval_required' => false,
-                    'added_by_id' => $staff->id,
-                    'request_date' => Carbon::now(),
-                    'customer_name' => $patient->fullname,
-                    'treatment_id' => $treatment->id,
+                    'added_by_id'          => $staff->id,
+                    'request_date'         => Carbon::now(),
+                    'customer_name'        => $patient->fullname,
+                    'treatment_id'         => $treatment->id,
                 ]);
 
-                $payment = new Payment();
-                $payment->amount = number_format($test->price ?? 0, 3, '.', '');
-                $payment->amount_payable = round(number_format($test->price ?? 0, 3, '.', ''));
-                $payment->customer_name = $patient->fullname;
+                // Payment type derived from the service type, not a separate model
+                $paymentType = $test->type; // 'LAB-TEST' or 'RADIOLOGY-TEST'
+
+                $payment                      = new Payment();
+                $payment->amount              = number_format($test->price ?? 0, 3, '.', '');
+                $payment->amount_payable      = round(number_format($test->price ?? 0, 3, '.', ''));
+                $payment->customer_name       = $patient->fullname;
                 $payment->transaction_reference = strtoupper(Str::random(10));
-                $payment->patient_id = $patient->id ?? null;
-                $payment->payable_id = $labRequest->id;
-                $payment->payable_type = LabRequest::class;
-                $payment->added_by_id = $staff->id;
-                $payment->type = 'LAB-TEST';
-                $payment->history = [
-                    ['date' => now(), 'title' => 'CREATED'],
-                ];
-                $payment->last_updated_by_id = $staff->id;
+                $payment->patient_id          = $patient->id;
+                $payment->payable_id          = $testRequest->id;
+                $payment->payable_type        = LabRequest::class; // always LabRequest
+                $payment->added_by_id         = $staff->id;
+                $payment->type                = $paymentType;
+                $payment->history             = [['date' => now(), 'title' => 'CREATED']];
+                $payment->last_updated_by_id  = $staff->id;
                 $payment->save();
 
-                $requests[] = $labRequest;
+                $requests[] = $testRequest;
             }
 
-            // update context metadata and sync relation
             $context->last_updated_by_id = $staff->id;
             $context->save();
 
-            // If recommendedTests relation expects ids, pass ids; if it expects models, pass models.
-            // Adjust this line to match your relationship signature.
-            $context->recommendedTests()->sync(array_map(fn($r) => $r->id, $requests));
+            $context->recommendedTests()->attach(
+                array_map(fn($r) => $r->id, $requests)
+            );
 
             DB::commit();
 
             return response()->json([
                 'message' => 'Recommended tests added successfully.',
-                'status' => 'success',
+                'status'  => 'success',
                 'success' => true,
             ]);
         } catch (BadRequestHttpException $e) {
             Log::info('Error recommending tests: ' . $e->getMessage());
             return response()->json([
                 'message' => $e->getMessage(),
-                'status' => 'error',
+                'status'  => 'error',
                 'success' => false,
             ], 400);
         } catch (Exception $e) {
@@ -1613,13 +2020,11 @@ class VisitationController extends Controller
             Log::error('Unexpected error: ' . $e->getMessage());
             return response()->json([
                 'message' => 'Something went wrong. Try again later.',
-                'status' => 'error',
+                'status'  => 'error',
                 'success' => false,
             ], 500);
         }
     }
-
-
 
     // public function updateRecommendedTests(Request $request, $visitationId)
     // {

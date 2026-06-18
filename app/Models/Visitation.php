@@ -71,6 +71,6 @@ class Visitation extends Model
 
     public function recommendedTests()
     {
-        return $this->belongsToMany(LabRequest::class, 'service_visitation', 'visitation_id', 'service_id');
+        return $this->belongsToMany(LabRequest::class, 'visitation_lab_requests', 'visitation_id', 'lab_request_id');
     }
 }

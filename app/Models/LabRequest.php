@@ -32,17 +32,17 @@ class LabRequest extends Model
     ];
 
     protected $casts = [
-        'is_approval_required' => 'boolean',
-        'is_patient' => 'boolean',
+        'is_approval_required'      => 'boolean',
+        'is_patient'                => 'boolean',
         'require_sample_collection' => 'boolean',
-        'sample_collected_date' => 'datetime',
-        'request_date' => 'date',
-        'approved_date' => 'date',
+        'sample_collected_date'     => 'datetime',
+        'request_date'              => 'date',
+        'approved_date'             => 'date',
     ];
 
     public function patient()
     {
-        return $this->belongsTo(Patient::class);
+        return $this->belongsTo(Patient::class, 'patient_id');
     }
 
     public function service()
@@ -75,8 +75,8 @@ class LabRequest extends Model
         return $this->belongsTo(User::class, 'last_updated_by_id');
     }
 
-    public function testResult()
+    public function diagnosticResults()
     {
-        return $this->hasOne(DiagnosticTestResult::class, 'request_id');
+        return $this->morphMany(DiagnosticTestResult::class, 'requestable');
     }
 }

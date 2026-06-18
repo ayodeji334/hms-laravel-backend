@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class LabRequestController extends Controller
 {
@@ -607,84 +608,684 @@ class LabRequestController extends Controller
     public function createResult(Request $request, $id)
     {
         $request->validate([
-            'type' => ['required', 'in:LAB,RADIOLOGY'],
-            'result_carried_out_by' => ['required', 'integer'],
-            'result_date' => ['required', 'date'],
-            'result_details' => ['required', 'array'],
-            'is_save_as_draft' => ['required', 'boolean'],
+            'type'                   => ['required', 'in:LAB,RADIOLOGY'],
+            'result_carried_out_by'  => ['required', 'integer'],
+            'result_date'            => ['required', 'date'],
+            'result_details'         => ['required', 'array'],
+            'is_save_as_draft'       => ['required', 'boolean'],
+            'result_images'          => ['sometimes', 'array', 'max:10'],
+            'result_images.*'        => ['file', 'max:5120'],
         ]);
 
         try {
-            $staff = Auth::user();
-            $type = strtoupper($request->input('type'));
+            $staff       = Auth::user();
+            $type        = strtoupper($request->input('type'));
+            $serviceType = $type === 'LAB' ? 'LAB-TEST' : 'RADIOLOGY-TEST';
 
-            $requestModel = $type === 'LAB' ? LabRequest::class : RadiologyRequest::class;
-
-            /** @var LabRequest|RadiologyRequest|null $testRequest */
-            $testRequest = $requestModel::with(['payment', 'patient', 'testResult', 'service'])->find($id);
+            // Find the request by type
+            $testRequest = LabRequest::with(['payment', 'patient', 'diagnosticResults', 'service'])
+                ->whereHas('service', fn($q) => $q->where('type', $serviceType))
+                ->find($id);
 
             if (!$testRequest) {
                 return response()->json([
                     'message' => "{$type} request not found",
                     'success' => false,
-                    'status' => 'error',
+                    'status'  => 'error',
                 ], 400);
             }
 
-            if ($testRequest->testResult) {
+            if ($testRequest->diagnosticResults()->exists()) {
                 return response()->json([
                     'message' => 'Result already exists for this request.',
                     'success' => false,
-                    'status' => 'error',
+                    'status'  => 'error',
                 ], 400);
             }
 
-            Log::info(($testRequest->payment->id));
+            if (!$testRequest->payment || $testRequest->payment->status !== 'COMPLETED') {
+                return response()->json([
+                    'message' => 'Payment has not been completed. Confirm that the payment has been made.',
+                    'success' => false,
+                    'status'  => 'error',
+                ], 400);
+            }
 
-            // if (!$testRequest->payment || $testRequest->payment->status !== 'COMPLETED') {
-            //     return response()->json([
-            //         'message' => 'Payment not found or not completed.',
-            //         'success' => false,
-            //         'status' => 'error',
-            //     ], 400);
-            // }
-
-            $examiner = User::find($request['result_carried_out_by']);
+            $examiner = User::find($request->input('result_carried_out_by'));
             if (!$examiner) {
                 return response()->json([
                     'message' => 'Examiner not found.',
                     'success' => false,
-                    'status' => 'error',
-                ], 400);
+                    'status'  => 'error',
+                ], 404);
             }
 
-            $result = new DiagnosticTestResult();
-            $result->added_by_id = $staff->id;
-            $result->patient_id = $testRequest->patient_id;
-            $result->result_carried_out_by_id = $examiner->id;
-            $result->result_date = $request['result_date'];
-            $result->result_details = $request['result_details'];
-            $result->test_id = $testRequest->service_id;
-            $result->request_id = $testRequest->id;
-            $result->resultable_id = $testRequest->id;
-            $result->resultable_type = $requestModel; // polymorphic link
-            $result->is_save_as_draft = $request['is_save_as_draft'];
-            $result->save();
+            // Process images only for RADIOLOGY
+            $resultImages = $type === 'RADIOLOGY'
+                ? $this->processRadiologyImages($request)
+                : null;
+
+            // Decode result_details only for RADIOLOGY
+            $resultDetails = $request->input('result_details');
+
+            if ($type === 'RADIOLOGY') {
+                if (is_string($resultDetails)) {
+                    $resultDetails = json_decode($resultDetails, true);
+                }
+
+                // Handle nested JSON strings
+                // if (isset($resultDetails['input_fields']) && is_string($resultDetails['input_fields'])) {
+                //     $resultDetails['input_fields'] = json_decode($resultDetails['input_fields'], true);
+                // }
+
+                // if (isset($resultDetails['categories']) && is_string($resultDetails['categories'])) {
+                //     $resultDetails['categories'] = json_decode($resultDetails['categories'], true);
+                // }
+
+                // if (isset($resultDetails['tables']) && is_string($resultDetails['tables'])) {
+                //     $resultDetails['tables'] = json_decode($resultDetails['tables'], true);
+                // }
+
+                foreach (['input_fields', 'categories', 'tables'] as $field) {
+                    if (isset($resultDetails[$field]) && is_string($resultDetails[$field])) {
+                        $resultDetails[$field] = json_decode($resultDetails[$field], true);
+                    }
+                }
+            }
+
+            $testRequest->diagnosticResults()->create([
+                'added_by_id'              => $staff->id,
+                'patient_id'               => $testRequest->patient_id,
+                'result_carried_out_by_id' => $examiner->id,
+                'result_date'              => $request->input('result_date'),
+                'result_details'           => $resultDetails,
+                'result_images'            => $resultImages,
+                'test_id'                  => $testRequest->service_id,
+                'is_save_as_draft'         => $request->input('is_save_as_draft'),
+                'last_updated_by_id'       => $staff->id,
+            ]);
 
             return response()->json([
                 'message' => "{$type} test result created successfully",
-                'status' => 'success',
+                'status'  => 'success',
                 'success' => true,
             ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'message' => $e->errors(),
+                'success' => false,
+                'status'  => 'error',
+            ], 422);
         } catch (Exception $e) {
             Log::error($e->getMessage());
             return response()->json([
                 'message' => 'Something went wrong. Try again later.',
                 'success' => false,
-                'status' => 'error',
+                'status'  => 'error',
             ], 500);
         }
     }
+
+
+    // public function createResult(Request $request, $id)
+    // {
+    //     $request->validate([
+    //         'type'                   => ['required', 'in:LAB,RADIOLOGY'],
+    //         'result_carried_out_by'  => ['required', 'integer'],
+    //         'result_date'            => ['required', 'date'],
+    //         'result_details'         => ['required', 'array'],
+    //         'is_save_as_draft'       => ['required', 'boolean'],
+    //         'result_images'          => ['sometimes', 'array', 'max:10'],
+    //         'result_images.*'        => ['file', 'max:5120'],
+    //     ]);
+
+    //     try {
+    //         $staff     = Auth::user();
+    //         $type      = strtoupper($request->input('type'));
+    //         $serviceType = $type === 'LAB' ? 'LAB-TEST' : 'RADIOLOGY-TEST';
+
+    //         // All requests are stored as LabRequest — filter by service type
+    //         $testRequest = LabRequest::with(['payment', 'patient', 'diagnosticResults', 'service'])
+    //             ->whereHas('service', fn($q) => $q->where('type', $serviceType))
+    //             ->find($id);
+
+    //         if (!$testRequest) {
+    //             return response()->json([
+    //                 'message' => "{$type} request not found",
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         if ($testRequest->diagnosticResults()->exists()) {
+    //             return response()->json([
+    //                 'message' => 'Result already exists for this request.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         if (!$testRequest->payment) {
+    //             return response()->json([
+    //                 'message' => 'No payment record found for this request.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         if ($testRequest->payment->status !== 'COMPLETED') {
+    //             return response()->json([
+    //                 'message' => 'Payment has not been completed. Confirm that the payment has been made.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         $examiner = User::find($request->input('result_carried_out_by'));
+    //         if (!$examiner) {
+    //             return response()->json([
+    //                 'message' => 'Examiner not found.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 404);
+    //         }
+
+    //         // Process images only for RADIOLOGY
+    //         $resultImages = $type === 'RADIOLOGY'
+    //             ? $this->processRadiologyImages($request)
+    //             : null;
+
+    //         if (is_string($request->result_details)) {
+    //             $request->merge([
+    //                 'result_details' => json_decode($request->result_details, true)
+    //             ]);
+    //         }
+
+    //         // $resultDetails = $request->input('result_details');
+
+    //         // $resultDetails['categories'] = json_decode(
+    //         //     $resultDetails['categories'],
+    //         //     true
+    //         // );
+
+    //         // $resultDetails['input_fields'] = json_decode(
+    //         //     $resultDetails['input_fields'],
+    //         //     true
+    //         // );
+
+    //         // $resultDetails['tables'] = json_decode(
+    //         //     $resultDetails['tables'],
+    //         //     true
+    //         // );
+
+    //         $testRequest->diagnosticResults()->create([
+    //             'added_by_id'              => $staff->id,
+    //             'patient_id'               => $testRequest->patient_id,
+    //             'result_carried_out_by_id' => $examiner->id,
+    //             'result_date'              => $request->input('result_date'),
+    //             'result_details'           => $resultDetails,
+    //             'result_images'            => $resultImages,
+    //             'test_id'                  => $testRequest->service_id,
+    //             'is_save_as_draft'         => $request->input('is_save_as_draft'),
+    //             'last_updated_by_id'       => $staff->id,
+    //         ]);
+
+    //         return response()->json([
+    //             'message' => "{$type} test result created successfully",
+    //             'status'  => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (ValidationException $e) {
+    //         return response()->json([
+    //             'message' => $e->errors(),
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 422);
+    //     } catch (Exception $e) {
+    //         Log::error($e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again later.',
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 500);
+    //     }
+    // }
+
+    public function updateResult(Request $request, $id)
+    {
+        $request->validate([
+            'result_carried_out_by' => ['required', 'integer'],
+            'result_date'           => ['required', 'date'],
+            'result_details'        => ['required', 'array'],
+            'is_save_as_draft'      => ['required', 'boolean'],
+            'result_images'         => ['sometimes', 'array', 'max:10'],
+            'result_images.*'       => ['file', 'max:5120'],
+        ]);
+
+        try {
+            $staff = Auth::user();
+
+            $result = DiagnosticTestResult::find($id);
+            if (!$result) {
+                return response()->json([
+                    'message' => 'Result not found.',
+                    'success' => false,
+                    'status'  => 'error',
+                ], 404);
+            }
+
+            // Confirm the parent request still exists and belongs to a valid service type
+            $testRequest = LabRequest::with(['payment', 'service'])
+                ->whereHas('service', fn($q) => $q->whereIn('type', ['LAB-TEST', 'RADIOLOGY-TEST']))
+                ->find($result->requestable_id);
+
+            if (!$testRequest) {
+                return response()->json([
+                    'message' => 'Associated test request not found.',
+                    'success' => false,
+                    'status'  => 'error',
+                ], 404);
+            }
+
+            $examiner = User::find($request->input('result_carried_out_by'));
+            if (!$examiner) {
+                return response()->json([
+                    'message' => 'Examiner not found.',
+                    'success' => false,
+                    'status'  => 'error',
+                ], 404);
+            }
+
+            // Re-process images if new ones uploaded, otherwise keep existing
+            $isRadiology = $testRequest->service?->type === 'RADIOLOGY-TEST';
+            $resultImages = ($isRadiology && $request->hasFile('result_images'))
+                ? $this->processRadiologyImages($request)
+                : $result->result_images;
+
+            $resultDetails = $request->input('result_details');
+
+            if ($testRequest->service->type === 'RADIOLOGY') {
+                if (is_string($resultDetails)) {
+                    $resultDetails = json_decode($resultDetails, true);
+                }
+
+                // Handle nested JSON strings
+                if (isset($resultDetails['input_fields']) && is_string($resultDetails['input_fields'])) {
+                    $resultDetails['input_fields'] = json_decode($resultDetails['input_fields'], true);
+                }
+
+                if (isset($resultDetails['categories']) && is_string($resultDetails['categories'])) {
+                    $resultDetails['categories'] = json_decode($resultDetails['categories'], true);
+                }
+
+                if (isset($resultDetails['tables']) && is_string($resultDetails['tables'])) {
+                    $resultDetails['tables'] = json_decode($resultDetails['tables'], true);
+                }
+            }
+
+            $result->update([
+                'result_carried_out_by_id' => $examiner->id,
+                'result_date'              => $request->input('result_date'),
+                'result_details'           => $request->input('result_details'),
+                'result_images'            => $resultImages,
+                'last_updated_by_id'       => $staff->id,
+                'is_save_as_draft'         => $request->input('is_save_as_draft'),
+            ]);
+
+            return response()->json([
+                'message' => 'Test result updated successfully',
+                'status'  => 'success',
+                'success' => true,
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'message' => $e->errors(),
+                'success' => false,
+                'status'  => 'error',
+            ], 422);
+        } catch (Exception $e) {
+            Log::error($e->getMessage());
+            return response()->json([
+                'message' => 'Something went wrong.',
+                'success' => false,
+                'status'  => 'error',
+            ], 500);
+        }
+    }
+
+    // public function createResult(Request $request, $id)
+    // {
+    //     $request->validate([
+    //         'type'                   => ['required', 'in:LAB,RADIOLOGY'],
+    //         'result_carried_out_by'  => ['required', 'integer'],
+    //         'result_date'            => ['required', 'date'],
+    //         'result_details'         => ['required', 'array'],
+    //         'is_save_as_draft'       => ['required', 'boolean'],
+    //         'result_images'          => ['sometimes', 'array', 'max:10'],
+    //         'result_images.*'        => ['file', 'max:5120'],
+    //     ]);
+
+    //     try {
+    //         $staff = Auth::user();
+    //         $type  = strtoupper($request->input('type'));
+
+    //         $requestModel = $type === 'LAB' ? LabRequest::class : RadiologyRequest::class;
+
+    //         /** @var LabRequest|RadiologyRequest|null $testRequest */
+    //         $testRequest = $requestModel::with(['payment', 'patient', 'diagnosticResults', 'service'])->find($id);
+
+    //         if (!$testRequest) {
+    //             return response()->json([
+    //                 'message' => "{$type} request not found",
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 404);
+    //         }
+
+    //         if ($testRequest->diagnosticResults()->exists()) {
+    //             return response()->json([
+    //                 'message' => 'Result already exists for this request.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         if (!$testRequest->payment) {
+    //             return response()->json([
+    //                 'message' => 'No payment record found for this request.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         if ($testRequest->payment->status !== 'COMPLETED') {
+    //             return response()->json([
+    //                 'message' => "Payment has not been completed. Confirm that the payment has been made",
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         $examiner = User::find($request->input('result_carried_out_by'));
+    //         if (!$examiner) {
+    //             return response()->json([
+    //                 'message' => 'Examiner not found.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 404);
+    //         }
+
+    //         // Process images only for RADIOLOGY
+    //         $resultImages = $type === 'RADIOLOGY'
+    //             ? $this->processRadiologyImages($request)
+    //             : null;
+
+    //         $testRequest->diagnosticResults()->create([
+    //             'added_by_id'              => $staff->id,
+    //             'patient_id'               => $testRequest->patient_id,
+    //             'result_carried_out_by_id' => $examiner->id,
+    //             'result_date'              => $request->input('result_date'),
+    //             'result_details'           => $request->input('result_details'),
+    //             'result_images'            => $resultImages,
+    //             'test_id'                  => $testRequest->service_id,
+    //             'is_save_as_draft'         => $request->input('is_save_as_draft'),
+    //             'last_updated_by_id'       => $staff->id,
+    //         ]);
+
+    //         return response()->json([
+    //             'message' => "{$type} test result created successfully",
+    //             'status'  => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (ValidationException $e) {
+    //         return response()->json([
+    //             'message' => $e->errors(),
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 422);
+    //     } catch (Exception $e) {
+    //         Log::error($e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again later.',
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 500);
+    //     }
+    // }
+
+    // public function updateResult(Request $request, $id)
+    // {
+    //     $request->validate([
+    //         'result_images'   => ['sometimes', 'array', 'max:10'],
+    //         'result_images.*' => ['file', 'max:5120'],
+    //     ]);
+
+    //     try {
+    //         $staff = Auth::user();
+
+    //         $result = DiagnosticTestResult::find($id);
+    //         if (!$result) {
+    //             return response()->json([
+    //                 'message' => 'Result detail not found',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 404);
+    //         }
+
+    //         $examiner = User::find($request->input('result_carried_out_by'));
+    //         if (!$examiner) {
+    //             return response()->json([
+    //                 'message' => 'Examiner detail not found',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 404);
+    //         }
+
+    //         // Handle images
+    //         $resultImages = $request->hasFile('result_images')
+    //             ? $this->processRadiologyImages($request)
+    //             : $result->result_images;
+
+    //         $result->update([
+    //             'result_carried_out_by_id' => $examiner->id,
+    //             'result_date'              => $request->input('result_date'),
+    //             'result_details'           => $request->input('result_details'),
+    //             'result_images'            => $resultImages,
+    //             'last_updated_by_id'       => $staff->id,
+    //             'is_save_as_draft'         => $request->input('is_save_as_draft'),
+    //         ]);
+
+    //         return response()->json([
+    //             'message' => 'Test result updated successfully',
+    //             'status'  => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (ValidationException $e) {
+    //         return response()->json([
+    //             'message' => $e->errors(),
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 422);
+    //     } catch (Exception $e) {
+    //         Log::error($e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong',
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 500);
+    //     }
+    // }
+
+
+    // public function createResult(Request $request, $id)
+    // {
+    //     $request->validate([
+    //         'type'                   => ['required', 'in:LAB,RADIOLOGY'],
+    //         'result_carried_out_by'  => ['required', 'integer'],
+    //         'result_date'            => ['required', 'date'],
+    //         'result_details'         => ['required', 'array'],
+    //         'is_save_as_draft'       => ['required', 'boolean'],
+    //         // Basic Laravel-level gate before our deep check below
+    //         'result_images'          => ['sometimes', 'array', 'max:10'],
+    //         'result_images.*'        => ['file', 'max:5120'],
+    //     ]);
+
+    //     try {
+    //         $staff = Auth::user();
+    //         $type  = strtoupper($request->input('type'));
+
+    //         $requestModel = $type === 'LAB' ? LabRequest::class : RadiologyRequest::class;
+
+    //         /** @var LabRequest|RadiologyRequest|null $testRequest */
+    //         $testRequest = $requestModel::with(['payment', 'patient', 'testResult', 'service'])->find($id);
+
+    //         if (!$testRequest) {
+    //             return response()->json([
+    //                 'message' => "{$type} request not found",
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         if ($testRequest->testResult) {
+    //             return response()->json([
+    //                 'message' => 'Result already exists for this request.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         $examiner = User::find($request['result_carried_out_by']);
+    //         if (!$examiner) {
+    //             return response()->json([
+    //                 'message' => 'Examiner not found.',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         // Process images only for RADIOLOGY
+    //         $resultImages = null;
+    //         if ($type === 'RADIOLOGY') {
+    //             $resultImages = $this->processRadiologyImages($request);
+    //         }
+
+    //         $result = new DiagnosticTestResult();
+    //         $result->added_by_id              = $staff->id;
+    //         $result->patient_id               = $testRequest->patient_id;
+    //         $result->result_carried_out_by_id = $examiner->id;
+    //         $result->result_date              = $request['result_date'];
+    //         $result->result_details           = $request['result_details'];
+    //         $result->result_images            = $resultImages;
+    //         $result->test_id                  = $testRequest->service_id;
+    //         $result->request_id               = $testRequest->id;
+    //         $result->resultable_id            = $testRequest->id;
+    //         $result->resultable_type          = $requestModel;
+    //         $result->is_save_as_draft         = $request['is_save_as_draft'];
+    //         $result->save();
+
+    //         return response()->json([
+    //             'message' => "{$type} test result created successfully",
+    //             'status'  => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (ValidationException $e) {
+    //         return response()->json([
+    //             'message' => $e->errors(),
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 422);
+    //     } catch (Exception $e) {
+    //         Log::error($e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again later.',
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 500);
+    //     }
+    // }
+
+    // public function createResult(Request $request, $id)
+    // {
+    //     $request->validate([
+    //         'type' => ['required', 'in:LAB,RADIOLOGY'],
+    //         'result_carried_out_by' => ['required', 'integer'],
+    //         'result_date' => ['required', 'date'],
+    //         'result_details' => ['required', 'array'],
+    //         'is_save_as_draft' => ['required', 'boolean'],
+    //     ]);
+
+    //     try {
+    //         $staff = Auth::user();
+    //         $type = strtoupper($request->input('type'));
+
+    //         $requestModel = $type === 'LAB' ? LabRequest::class : RadiologyRequest::class;
+
+    //         /** @var LabRequest|RadiologyRequest|null $testRequest */
+    //         $testRequest = $requestModel::with(['payment', 'patient', 'testResult', 'service'])->find($id);
+
+    //         if (!$testRequest) {
+    //             return response()->json([
+    //                 'message' => "{$type} request not found",
+    //                 'success' => false,
+    //                 'status' => 'error',
+    //             ], 400);
+    //         }
+
+    //         if ($testRequest->testResult) {
+    //             return response()->json([
+    //                 'message' => 'Result already exists for this request.',
+    //                 'success' => false,
+    //                 'status' => 'error',
+    //             ], 400);
+    //         }
+
+    //         Log::info(($testRequest->payment->id));
+
+    //         // if (!$testRequest->payment || $testRequest->payment->status !== 'COMPLETED') {
+    //         //     return response()->json([
+    //         //         'message' => 'Payment not found or not completed.',
+    //         //         'success' => false,
+    //         //         'status' => 'error',
+    //         //     ], 400);
+    //         // }
+
+    //         $examiner = User::find($request['result_carried_out_by']);
+    //         if (!$examiner) {
+    //             return response()->json([
+    //                 'message' => 'Examiner not found.',
+    //                 'success' => false,
+    //                 'status' => 'error',
+    //             ], 400);
+    //         }
+
+    //         $result = new DiagnosticTestResult();
+    //         $result->added_by_id = $staff->id;
+    //         $result->patient_id = $testRequest->patient_id;
+    //         $result->result_carried_out_by_id = $examiner->id;
+    //         $result->result_date = $request['result_date'];
+    //         $result->result_details = $request['result_details'];
+    //         $result->test_id = $testRequest->service_id;
+    //         $result->request_id = $testRequest->id;
+    //         $result->resultable_id = $testRequest->id;
+    //         $result->resultable_type = $requestModel; // polymorphic link
+    //         $result->is_save_as_draft = $request['is_save_as_draft'];
+    //         $result->save();
+
+    //         return response()->json([
+    //             'message' => "{$type} test result created successfully",
+    //             'status' => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (Exception $e) {
+    //         Log::error($e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again later.',
+    //             'success' => false,
+    //             'status' => 'error',
+    //         ], 500);
+    //     }
+    // }
 
 
 
@@ -809,51 +1410,112 @@ class LabRequestController extends Controller
     //     }
     // }
 
-    public function updateResult(Request $request, $id)
-    {
-        try {
-            $staff = Auth::user();
+    // public function updateResult(Request $request, $id)
+    // {
+    //     try {
+    //         $staff = Auth::user();
 
-            $result = DiagnosticTestResult::find($id);
-            if (!$result) {
-                return response()->json([
-                    'message' => 'Result detail not found',
-                    'success' => false,
-                    'status' => 'error',
-                ], 400);
-            }
+    //         $result = DiagnosticTestResult::find($id);
+    //         if (!$result) {
+    //             return response()->json([
+    //                 'message' => 'Result detail not found',
+    //                 'success' => false,
+    //                 'status' => 'error',
+    //             ], 400);
+    //         }
 
-            $examiner = User::find($request['result_carried_out_by']);
-            if (!$examiner) {
-                return response()->json([
-                    'message' => 'Examiner detail not found',
-                    'success' => false,
-                    'status' => 'error',
-                ], 400);
-            }
+    //         $examiner = User::find($request['result_carried_out_by']);
+    //         if (!$examiner) {
+    //             return response()->json([
+    //                 'message' => 'Examiner detail not found',
+    //                 'success' => false,
+    //                 'status' => 'error',
+    //             ], 400);
+    //         }
 
-            $result->result_carried_out_by_id = $examiner->id;
-            $result->result_date = $request['result_date'];
-            $result->result_details = $request['result_details'];
-            $result->last_updated_by_id = $staff->id;
-            $result->is_save_as_draft = $request['is_save_as_draft'];
-            $result->save();
+    //         $result->result_carried_out_by_id = $examiner->id;
+    //         $result->result_date = $request['result_date'];
+    //         $result->result_details = $request['result_details'];
+    //         $result->last_updated_by_id = $staff->id;
+    //         $result->is_save_as_draft = $request['is_save_as_draft'];
+    //         $result->save();
 
-            return [
-                'message' => 'Test result updated successfully',
-                'status' => 'success',
-                'success' => true,
-            ];
-        } catch (Exception $e) {
-            Log::info($e->getMessage());
-            return response()->json([
-                'message' => 'Something went wrong',
-                'success' => false,
-                'status' => 'error',
-            ], 500);
-        }
-    }
+    //         return [
+    //             'message' => 'Test result updated successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //         ];
+    //     } catch (Exception $e) {
+    //         Log::info($e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong',
+    //             'success' => false,
+    //             'status' => 'error',
+    //         ], 500);
+    //     }
+    // }
 
+    // public function updateResult(Request $request, $id)
+    // {
+    //     $request->validate([
+    //         'result_images'   => ['sometimes', 'array', 'max:10'],
+    //         'result_images.*' => ['file', 'max:5120'],
+    //     ]);
+
+    //     try {
+    //         $staff = Auth::user();
+
+    //         $result = DiagnosticTestResult::find($id);
+    //         if (!$result) {
+    //             return response()->json([
+    //                 'message' => 'Result detail not found',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         $examiner = User::find($request['result_carried_out_by']);
+    //         if (!$examiner) {
+    //             return response()->json([
+    //                 'message' => 'Examiner detail not found',
+    //                 'success' => false,
+    //                 'status'  => 'error',
+    //             ], 400);
+    //         }
+
+    //         // Re-process images if new ones are uploaded, otherwise keep existing
+    //         $resultImages = $request->hasFile('result_images')
+    //             ? $this->processRadiologyImages($request)
+    //             : $result->result_images;
+
+    //         $result->result_carried_out_by_id = $examiner->id;
+    //         $result->result_date              = $request['result_date'];
+    //         $result->result_details           = $request['result_details'];
+    //         $result->result_images            = $resultImages;
+    //         $result->last_updated_by_id       = $staff->id;
+    //         $result->is_save_as_draft         = $request['is_save_as_draft'];
+    //         $result->save();
+
+    //         return response()->json([
+    //             'message' => 'Test result updated successfully',
+    //             'status'  => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (ValidationException $e) {
+    //         return response()->json([
+    //             'message' => $e->errors(),
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 422);
+    //     } catch (Exception $e) {
+    //         Log::error($e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong',
+    //             'success' => false,
+    //             'status'  => 'error',
+    //         ], 500);
+    //     }
+    // }
     public function findOne(string $id)
     {
         try {
@@ -941,18 +1603,19 @@ class LabRequestController extends Controller
                 'service.resultTemplate.categories.tables.columns',
                 'service.resultTemplate.categories.tables.rowCategories.rows',
                 'addedBy',
-                'testResult.test',
-                'testResult.patient',
-                'testResult.addedBy',
-                'testResult.resultCarriedOutBy',
+                'diagnosticResults.test',
+                'diagnosticResults.patient',
+                'diagnosticResults.addedBy',
+                'diagnosticResults.resultCarriedOutBy',
                 'treatment:id,diagnosis',
                 'treatment.createdBy:id,firstname,lastname'
-            ]);
+            ])->whereHas('service', fn($q) => $q->where('type', 'LAB-TEST'));;
+
 
             if ($type === 'RESULT-AVAILABLE') {
-                $query->whereHas('testResult');
+                $query->whereHas('diagnosticResults');
             } elseif ($type === 'RESULT-NOT-AVAILABLE') {
-                $query->whereDoesntHave('testResult');
+                $query->whereDoesntHave('diagnosticResults');
             }
 
             if (!empty($searchQuery)) {
@@ -987,7 +1650,7 @@ class LabRequestController extends Controller
         try {
             $searchQuery = $request->input('q', '');
 
-            $query = RadiologyRequest::with([
+            $query = LabRequest::with([
                 'patient',
                 'payment:id,payable_id,status,transaction_reference',
                 'service.resultTemplate.categories.tables.category',
@@ -998,27 +1661,30 @@ class LabRequestController extends Controller
                 'service.resultTemplate.categories.tables.columns',
                 'service.resultTemplate.categories.tables.rowCategories.rows',
                 'addedBy',
-                'testResult.test',
-                'testResult.patient',
-                'testResult.addedBy',
-                'testResult.resultCarriedOutBy',
+                'diagnosticResults.test',
+                'diagnosticResults.patient',
+                'diagnosticResults.addedBy',
+                'diagnosticResults.resultCarriedOutBy',
                 'treatment:id,diagnosis',
-                'treatment.createdBy:id,firstname,lastname'
-            ]);
+                'treatment.createdBy:id,firstname,lastname',
+            ])
+                // Filter to only radiology tests via the service relationship
+                ->whereHas('service', fn($q) => $q->where('type', 'RADIOLOGY-TEST'));
 
             if (!empty($searchQuery)) {
                 $query->where(function ($q) use ($searchQuery) {
-                    $q->where('customer_name', 'like', "%{$searchQuery}%");
+                    $q->where('customer_name', 'like', "%{$searchQuery}%")
+                        ->orWhereHas('patient', fn($q) => $q->where('fullname', 'like', "%{$searchQuery}%"));
                 });
             }
 
             $radiologyRequests = $query->orderByDesc('updated_at')->paginate();
 
             return response()->json([
-                'message' => 'Radiology Request fetched successfully',
-                'status' => 'success',
+                'message' => 'Radiology requests fetched successfully',
+                'status'  => 'success',
                 'success' => true,
-                'data' => $radiologyRequests,
+                'data'    => $radiologyRequests,
             ]);
         } catch (Exception $e) {
             Log::error('Error fetching radiology requests: ' . $e->getMessage());
@@ -1026,10 +1692,79 @@ class LabRequestController extends Controller
             return response()->json([
                 'message' => 'Something went wrong. Try again in 5 minutes',
                 'success' => false,
-                'status' => 'error',
+                'status'  => 'error',
             ], 500);
         }
     }
+
+    // public function findAllRadiologyRequests(Request $request)
+    // {
+    //     try {
+    //         $searchQuery = $request->input('q', '');
+
+    //         // $query = RadiologyRequest::with([
+    //         //     'patient',
+    //         //     'payment:id,payable_id,status,transaction_reference',
+    //         //     'service.resultTemplate.categories.tables.category',
+    //         //     'service.resultTemplate.tables.rows',
+    //         //     'service.resultTemplate.tables.columns',
+    //         //     'service.resultTemplate.tables.rowCategories.rows',
+    //         //     'service.resultTemplate.categories.tables.rows',
+    //         //     'service.resultTemplate.categories.tables.columns',
+    //         //     'service.resultTemplate.categories.tables.rowCategories.rows',
+    //         //     'addedBy',
+    //         //     'testResult.test',
+    //         //     'testResult.patient',
+    //         //     'testResult.addedBy',
+    //         //     'testResult.resultCarriedOutBy',
+    //         //     'treatment:id,diagnosis',
+    //         //     'treatment.createdBy:id,firstname,lastname'
+    //         // ]);
+
+    //         $query = RadiologyRequest::with([
+    //             'patient',
+    //             'payment:id,payable_id,status,transaction_reference',
+    //             'service.resultTemplate.categories.tables.category',
+    //             'service.resultTemplate.tables.rows',
+    //             'service.resultTemplate.tables.columns',
+    //             'service.resultTemplate.tables.rowCategories.rows',
+    //             'service.resultTemplate.categories.tables.rows',
+    //             'service.resultTemplate.categories.tables.columns',
+    //             'service.resultTemplate.categories.tables.rowCategories.rows',
+    //             'addedBy',
+    //             'diagnosticResults.test',
+    //             'diagnosticResults.patient',
+    //             'diagnosticResults.addedBy',
+    //             'diagnosticResults.resultCarriedOutBy',
+    //             'treatment:id,diagnosis',
+    //             'treatment.createdBy:id,firstname,lastname'
+    //         ]);
+
+
+    //         if (!empty($searchQuery)) {
+    //             $query->where(function ($q) use ($searchQuery) {
+    //                 $q->where('customer_name', 'like', "%{$searchQuery}%");
+    //             });
+    //         }
+
+    //         $radiologyRequests = $query->orderByDesc('updated_at')->paginate();
+
+    //         return response()->json([
+    //             'message' => 'Radiology Request fetched successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //             'data' => $radiologyRequests,
+    //         ]);
+    //     } catch (Exception $e) {
+    //         Log::error('Error fetching radiology requests: ' . $e->getMessage());
+
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'success' => false,
+    //             'status' => 'error',
+    //         ], 500);
+    //     }
+    // }
 
     public function downloadTestResult($id)
     {
@@ -1074,115 +1809,279 @@ class LabRequestController extends Controller
         }
     }
 
-
     public function getReport()
     {
         try {
-            $today = Carbon::today();
-            $yesterday = Carbon::yesterday();
-            $elevenMonthsAgo = Carbon::now()->subMonths(11);
+            $today           = Carbon::today();
+            $elevenMonthsAgo = Carbon::now()->subMonths(11)->startOfMonth();
 
-            $totalRequests = LabRequest::count();
-            $totalUrgentRequests = LabRequest::where('priority', 'URGENT')->count();
-            $lastFiveRequestWithoutResult = LabRequest::with(['testResult', 'payment', 'addedBy', 'service'])
-                ->whereDoesntHave('testResult')
+            $labType = LabRequest::class;
+            $radType = RadiologyRequest::class;
+
+            // ── Lab counts ────────────────────────────────────────────
+            $totalLabRequests        = LabRequest::count();
+            $totalUrgentLabRequests  = LabRequest::where('priority', 'URGENT')->count();
+            $totalRoutineLabRequests = $totalLabRequests - $totalUrgentLabRequests;
+            $totalLabWithResult      = LabRequest::whereHas('diagnosticResults')->count();
+            $totalLabWithoutResult   = $totalLabRequests - $totalLabWithResult;
+
+            // ── Radiology counts (no priority column) ─────────────────
+            $totalRadRequests      = RadiologyRequest::count();
+            $totalRadWithResult    = RadiologyRequest::whereHas('diagnosticResults')->count();
+            $totalRadWithoutResult = $totalRadRequests - $totalRadWithResult;
+
+            // ── Combined totals ───────────────────────────────────────
+            $totalRequests      = $totalLabRequests      + $totalRadRequests;
+            $totalWithResult    = $totalLabWithResult     + $totalRadWithResult;
+            $totalWithoutResult = $totalLabWithoutResult  + $totalRadWithoutResult;
+
+            // ── Recent requests without result ────────────────────────
+            $recentLabWithoutResult = LabRequest::with(['diagnosticResults', 'payment', 'addedBy', 'service'])
+                ->whereDoesntHave('diagnosticResults')
                 ->latest('updated_at')
                 ->limit(5)
-                ->get();
+                ->get()
+                ->map(fn($r) => array_merge($r->toArray(), ['request_type' => 'LAB']));
 
-            $requests = DB::table('lab_requests as request')
-                ->leftJoin('diagnostic_tests as result', 'request.id', '=', 'result.request_id')
+            $recentRadWithoutResult = RadiologyRequest::with(['diagnosticResults', 'payment', 'addedBy', 'service'])
+                ->whereDoesntHave('diagnosticResults')
+                ->latest('updated_at')
+                ->limit(5)
+                ->get()
+                ->map(fn($r) => array_merge($r->toArray(), ['request_type' => 'RADIOLOGY']));
+
+            $recentRequestsWithoutResult = $recentLabWithoutResult
+                ->concat($recentRadWithoutResult)
+                ->sortByDesc('updated_at')
+                ->take(10)
+                ->values()
+                ->toArray();
+
+            // ── Chart: lab requests ───────────────────────────────────
+            $labChartRows = DB::table('lab_requests as request')
+                ->leftJoin('diagnostic_tests as result', function ($join) use ($labType) {
+                    $join->on('request.id', '=', 'result.requestable_id')
+                        ->where('result.requestable_type', '=', $labType)
+                        ->whereNull('result.deleted_at');
+                })
                 ->selectRaw('
-                MONTH(request.created_at) as month,
-                YEAR(request.created_at) as year,
-                CASE 
-                    WHEN result.id IS NULL THEN "PENDING"
-                    ELSE "COMPLETED" 
-                END as statusGroup
+                YEAR(request.created_at)  AS year,
+                MONTH(request.created_at) AS month,
+                CASE WHEN result.id IS NULL THEN "PENDING" ELSE "COMPLETED" END AS status_group,
+                COUNT(*) AS total
             ')
-                ->whereBetween('request.created_at', [$elevenMonthsAgo, $yesterday])
-                ->groupBy('year', 'month', 'statusGroup', 'request.created_at')
-                ->orderByDesc('request.created_at')
+                ->whereBetween('request.created_at', [$elevenMonthsAgo, $today])
+                ->whereNull('request.deleted_at')
+                ->groupBy('year', 'month', 'status_group')
                 ->get();
 
-            $totalRequestsWithResult = LabRequest::whereHas('testResult')->count();
+            // ── Chart: radiology requests ─────────────────────────────
+            $radChartRows = DB::table('radiology_requests as request')
+                ->leftJoin('diagnostic_tests as result', function ($join) use ($radType) {
+                    $join->on('request.id', '=', 'result.requestable_id')
+                        ->where('result.requestable_type', '=', $radType)
+                        ->whereNull('result.deleted_at');
+                })
+                ->selectRaw('
+                YEAR(request.created_at)  AS year,
+                MONTH(request.created_at) AS month,
+                CASE WHEN result.id IS NULL THEN "PENDING" ELSE "COMPLETED" END AS status_group,
+                COUNT(*) AS total
+            ')
+                ->whereBetween('request.created_at', [$elevenMonthsAgo, $today])
+                ->whereNull('request.deleted_at')
+                ->groupBy('year', 'month', 'status_group')
+                ->get();
 
-            $chartData = $this->formatData(
-                collect($requests)->toArray(),
-                $today,
-                $elevenMonthsAgo
-            );
+            // ── Merge and sum by month + status ───────────────────────
+            $mergedRows = collect($labChartRows)
+                ->concat($radChartRows)
+                ->groupBy(fn($row) => "{$row->year}-{$row->month}-{$row->status_group}")
+                ->map(function ($group) {
+                    $first = $group->first();
+                    return (object) [
+                        'year'         => $first->year,
+                        'month'        => $first->month,
+                        'status_group' => $first->status_group,
+                        'total'        => $group->sum('total'),
+                    ];
+                })
+                ->values()
+                ->toArray();
 
-            $allUrgentRequests = $totalUrgentRequests;
-            $allRoutineRequests = $totalRequests - $totalUrgentRequests;
-            $allRequestsWithResult = $totalRequestsWithResult;
-            $allRequestsWithoutResult = $totalRequests - $totalRequestsWithResult;
-            $allRequests = $totalRequests;
+            $chartData = $this->formatData($mergedRows, $today, $elevenMonthsAgo);
 
             return response()->json([
-                'message' => 'Laboratory report detail Fetched Successfully',
-                'status' => 'success',
+                'message' => 'Laboratory report fetched successfully',
+                'status'  => 'success',
                 'success' => true,
-                'data' => [
-                    'total_test_requests' => $allRequests,
-                    'total_test_requests_with_result' => $allRequestsWithResult,
-                    'total_test_requests_without_result' => $allRequestsWithoutResult,
-                    'recent_requests_without_result' => array_merge(
-                        $lastFiveRequestWithoutResult->toArray(),
-                        // $xRayReportData['data']['recent_requests_without_result']
-                    ),
-                    'total_urgent_requests' => $allUrgentRequests,
-                    'total_routine_requests' => $allRoutineRequests,
+                'data'    => [
+                    'total_test_requests'                => $totalRequests,
+                    'total_test_requests_with_result'    => $totalWithResult,
+                    'total_test_requests_without_result' => $totalWithoutResult,
+                    'total_urgent_requests'              => $totalUrgentLabRequests,
+                    'total_routine_requests'             => $totalRoutineLabRequests,
+                    'recent_requests_without_result'     => $recentRequestsWithoutResult,
+                    'lab' => [
+                        'total'          => $totalLabRequests,
+                        'with_result'    => $totalLabWithResult,
+                        'without_result' => $totalLabWithoutResult,
+                        'urgent'         => $totalUrgentLabRequests,
+                        'routine'        => $totalRoutineLabRequests,
+                    ],
+                    'radiology' => [
+                        'total'          => $totalRadRequests,
+                        'with_result'    => $totalRadWithResult,
+                        'without_result' => $totalRadWithoutResult,
+                    ],
                     'chart_data' => $chartData,
-                ]
+                ],
             ]);
         } catch (Exception $e) {
-            Log::info($e->getMessage());
+            Log::error('getReport error: ' . $e->getMessage());
             return response()->json([
-                'message' => 'Something went wrong. Try again in 5 minutes',
+                'message' => 'Something went wrong. Try again in 5 minutes.',
                 'success' => false,
-                'status' => 'error',
+                'status'  => 'error',
             ], 500);
         }
     }
 
-    protected function formatData(array $requests, Carbon $today, Carbon $elevenMonthsAgo): array
+    private function formatData(array $rows, Carbon $today, Carbon $from): array
     {
-        try {
-            $months = $this->getMonthsBetweenTodayAndElevenMonthsAgo($today, $elevenMonthsAgo);
+        $months = [];
+        $cursor = $from->copy();
 
-            $formattedData = [];
-
-            foreach ($months as $monthInfo) {
-                $month = $monthInfo['month'];
-                $year = $monthInfo['year'];
-
-                $pending = collect($requests)->filter(function ($item) use ($month, $year) {
-                    return (int) $item->month === ($month + 1)
-                        && (int) $item->year === $year
-                        && $item->statusGroup === 'PENDING';
-                })->count();
-
-                $completed = collect($requests)->filter(function ($item) use ($month, $year) {
-                    return (int) $item->month === ($month + 1)
-                        && (int) $item->year === $year
-                        && $item->statusGroup === 'COMPLETED';
-                })->count();
-
-                $formattedData[] = [
-                    'month' => $month,
-                    'year' => $year,
-                    'pending' => $pending,
-                    'completed' => $completed,
-                ];
-            }
-
-            return $formattedData;
-        } catch (Exception $e) {
-            Log::info($e->getMessage());
-            throw $e;
+        while ($cursor->lte($today)) {
+            $key          = $cursor->year . '-' . $cursor->month;
+            $months[$key] = [
+                'month'     => $cursor->format('M Y'),
+                'PENDING'   => 0,
+                'COMPLETED' => 0,
+            ];
+            $cursor->addMonth();
         }
+
+        foreach ($rows as $row) {
+            $key         = $row->year . '-' . $row->month;
+            $statusGroup = $row->status_group; // was $row->statusGroup
+
+            if (isset($months[$key], $months[$key][$statusGroup])) {
+                $months[$key][$statusGroup] += $row->total;
+            }
+        }
+
+        return array_values($months);
     }
+
+    // // public function getReport()
+    // // {
+    // //     try {
+    // //         $today = Carbon::today();
+    // //         $yesterday = Carbon::yesterday();
+    // //         $elevenMonthsAgo = Carbon::now()->subMonths(11);
+
+    // //         $totalRequests = LabRequest::count();
+    // //         $totalUrgentRequests = LabRequest::where('priority', 'URGENT')->count();
+    // //         $lastFiveRequestWithoutResult = LabRequest::with(['diagnosticResults', 'payment', 'addedBy', 'service'])
+    // //             ->whereDoesntHave('diagnosticResults')
+    // //             ->latest('updated_at')
+    // //             ->limit(5)
+    // //             ->get();
+
+    // //         $requests = DB::table('lab_requests as request')
+    // //             ->leftJoin('diagnostic_tests as result', 'request.id', '=', 'result.request_id')
+    // //             ->selectRaw('
+    // //             MONTH(request.created_at) as month,
+    // //             YEAR(request.created_at) as year,
+    // //             CASE 
+    // //                 WHEN result.id IS NULL THEN "PENDING"
+    // //                 ELSE "COMPLETED" 
+    // //             END as statusGroup
+    // //         ')
+    // //             ->whereBetween('request.created_at', [$elevenMonthsAgo, $yesterday])
+    // //             ->groupBy('year', 'month', 'statusGroup', 'request.created_at')
+    // //             ->orderByDesc('request.created_at')
+    // //             ->get();
+
+    // //         $totalRequestsWithResult = LabRequest::whereHas('diagnosticResults')->count();
+
+    // //         $chartData = $this->formatData(
+    // //             collect($requests)->toArray(),
+    // //             $today,
+    // //             $elevenMonthsAgo
+    // //         );
+
+    // //         $allUrgentRequests = $totalUrgentRequests;
+    // //         $allRoutineRequests = $totalRequests - $totalUrgentRequests;
+    // //         $allRequestsWithResult = $totalRequestsWithResult;
+    // //         $allRequestsWithoutResult = $totalRequests - $totalRequestsWithResult;
+    // //         $allRequests = $totalRequests;
+
+    // //         return response()->json([
+    // //             'message' => 'Laboratory report detail Fetched Successfully',
+    // //             'status' => 'success',
+    // //             'success' => true,
+    // //             'data' => [
+    // //                 'total_test_requests' => $allRequests,
+    // //                 'total_test_requests_with_result' => $allRequestsWithResult,
+    // //                 'total_test_requests_without_result' => $allRequestsWithoutResult,
+    // //                 'recent_requests_without_result' => array_merge(
+    // //                     $lastFiveRequestWithoutResult->toArray(),
+    // //                     // $xRayReportData['data']['recent_requests_without_result']
+    // //                 ),
+    // //                 'total_urgent_requests' => $allUrgentRequests,
+    // //                 'total_routine_requests' => $allRoutineRequests,
+    // //                 'chart_data' => $chartData,
+    // //             ]
+    // //         ]);
+    // //     } catch (Exception $e) {
+    // //         Log::info($e->getMessage());
+    // //         return response()->json([
+    // //             'message' => 'Something went wrong. Try again in 5 minutes',
+    // //             'success' => false,
+    // //             'status' => 'error',
+    // //         ], 500);
+    // //     }
+    // // }
+
+    // protected function formatData(array $requests, Carbon $today, Carbon $elevenMonthsAgo): array
+    // {
+    //     try {
+    //         $months = $this->getMonthsBetweenTodayAndElevenMonthsAgo($today, $elevenMonthsAgo);
+
+    //         $formattedData = [];
+
+    //         foreach ($months as $monthInfo) {
+    //             $month = $monthInfo['month'];
+    //             $year = $monthInfo['year'];
+
+    //             $pending = collect($requests)->filter(function ($item) use ($month, $year) {
+    //                 return (int) $item->month === ($month + 1)
+    //                     && (int) $item->year === $year
+    //                     && $item->statusGroup === 'PENDING';
+    //             })->count();
+
+    //             $completed = collect($requests)->filter(function ($item) use ($month, $year) {
+    //                 return (int) $item->month === ($month + 1)
+    //                     && (int) $item->year === $year
+    //                     && $item->statusGroup === 'COMPLETED';
+    //             })->count();
+
+    //             $formattedData[] = [
+    //                 'month' => $month,
+    //                 'year' => $year,
+    //                 'pending' => $pending,
+    //                 'completed' => $completed,
+    //             ];
+    //         }
+
+    //         return $formattedData;
+    //     } catch (Exception $e) {
+    //         Log::info($e->getMessage());
+    //         throw $e;
+    //     }
+    // }
 
     protected function getMonthsBetweenTodayAndElevenMonthsAgo(Carbon $today, Carbon $elevenMonthsAgo): array
     {
@@ -1206,6 +2105,100 @@ class LabRequestController extends Controller
         }
 
         return $monthsAndYears;
+    }
+
+    /**
+     * Validates and converts uploaded radiology images to base64.
+     * Throws ValidationException on any violation.
+     *
+     * @param  \Illuminate\Http\Request $request
+     * @return array<string>|null  Array of base64 data-URI strings, or null if none uploaded
+     */
+    private function processRadiologyImages(Request $request): ?array
+    {
+        if (!$request->hasFile('result_images')) {
+            return null;
+        }
+
+        $files = $request->file('result_images'); // expect result_images[] from the form
+        if (!is_array($files)) {
+            $files = [$files];
+        }
+
+        // Hard limits
+        $maxFiles    = 10;
+        $maxSizeKb   = 5120; // 5 MB per file
+        $allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/dicom'];
+        $allowedExts  = ['jpg', 'jpeg', 'png', 'webp', 'dcm'];
+
+        if (count($files) > $maxFiles) {
+            throw ValidationException::withMessages([
+                'result_images' => "You may upload a maximum of {$maxFiles} images.",
+            ]);
+        }
+
+        $encoded = [];
+
+        foreach ($files as $index => $file) {
+            // 1. Confirm it is a real uploaded file object
+            if (!$file instanceof \Illuminate\Http\UploadedFile || !$file->isValid()) {
+                throw ValidationException::withMessages([
+                    'result_images' => "File at index {$index} is invalid or corrupted.",
+                ]);
+            }
+
+            // 2. Size check
+            if ($file->getSize() > $maxSizeKb * 1024) {
+                throw ValidationException::withMessages([
+                    'result_images' => "File '{$file->getClientOriginalName()}' exceeds the {$maxSizeKb} KB limit.",
+                ]);
+            }
+
+            // 3. Extension whitelist (client-supplied, first layer only)
+            $ext = strtolower($file->getClientOriginalExtension());
+            if (!in_array($ext, $allowedExts, true)) {
+                throw ValidationException::withMessages([
+                    'result_images' => "File '{$file->getClientOriginalName()}' has a disallowed extension.",
+                ]);
+            }
+
+            // 4. MIME type check via finfo against actual file bytes (not client header)
+            $finfo    = new \finfo(FILEINFO_MIME_TYPE);
+            $realMime = $finfo->file($file->getRealPath());
+            if (!in_array($realMime, $allowedMimes, true)) {
+                throw ValidationException::withMessages([
+                    'result_images' => "File '{$file->getClientOriginalName()}' has a disallowed content type ({$realMime}).",
+                ]);
+            }
+
+            // 5. Re-encode through GD/Imagick to strip any embedded payloads
+            //    (skipped for DICOM since PHP GD does not support it)
+            if (in_array($realMime, ['image/jpeg', 'image/png', 'image/webp'], true)) {
+                $image = imagecreatefromstring(file_get_contents($file->getRealPath()));
+                if ($image === false) {
+                    throw ValidationException::withMessages([
+                        'result_images' => "File '{$file->getClientOriginalName()}' could not be processed as an image.",
+                    ]);
+                }
+
+                ob_start();
+                match ($realMime) {
+                    'image/png'  => imagepng($image),
+                    'image/webp' => imagewebp($image),
+                    default      => imagejpeg($image, null, 90),
+                };
+                $cleanBytes = ob_get_clean();
+                imagedestroy($image);
+            } else {
+                // DICOM — read raw bytes, no re-encoding
+                $cleanBytes = file_get_contents($file->getRealPath());
+            }
+
+            // 6. Base64 encode with data URI prefix for easy rendering on the frontend
+            $encoded[] = 'data:' . $realMime . ';base64,' . base64_encode($cleanBytes);
+        }
+
+        return $encoded;
     }
 
     // protected function formatData(array $rawRequests, Carbon $today, Carbon $startDate): array
