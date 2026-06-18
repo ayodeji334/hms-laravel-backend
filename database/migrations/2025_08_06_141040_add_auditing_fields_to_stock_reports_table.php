@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('stock_reports', function (Blueprint $table) {
-            $table->decimal('unit_price', 10, 2)->nullable()->after('last_updated_by_id');
+            // $table->decimal('unit_price', 10, 2)->nullable()->after('last_updated_by_id');
             $table->decimal('sales_price', 10, 2)->nullable()->after('unit_price');
             $table->unsignedInteger('quantity_before')->nullable()->after('sales_price');
             $table->unsignedInteger('quantity_after')->nullable()->after('quantity_before');
@@ -22,7 +22,7 @@ return new class extends Migration
     {
         Schema::table('stock_reports', function (Blueprint $table) {
             $table->dropColumn([
-                'unit_price',
+                // 'unit_price',
                 'sales_price',
                 'quantity_before',
                 'quantity_after',
