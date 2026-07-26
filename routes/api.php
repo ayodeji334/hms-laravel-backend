@@ -353,9 +353,7 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('{id}/in-progress', [TreatmentController::class, 'inProgress']);
         Route::get('{id}/completed', [TreatmentController::class, 'complete']);
         Route::post('/', [TreatmentController::class, 'create'])->middleware("role:SUPER-ADMIN,DOCTOR");;
-        // Route::patch('{id}/reschedule', [TreatmentController::class, 'reschedule'])->middleware("role:SUPER-ADMIN,NURSE");
         Route::patch('{id}', [TreatmentController::class, 'update'])->middleware("role:SUPER-ADMIN,DOCTOR");
-        // Route::delete('{id}', [TreatmentController::class, 'delete']);
         Route::post('{id}/add-items', [TreatmentController::class, 'addItems']);
         Route::post('{id}/add-note', [TreatmentController::class, 'addNote']);
         Route::patch('{id}/update-items', [TreatmentController::class, 'addItems']);
@@ -367,7 +365,6 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::post('{id}/add-results', [LabRequestController::class, 'createResult'])->middleware("role:SUPER-ADMIN,LAB-TECHNOLOGIST,RADIOLOGIST");
         Route::get('dashboard', [LabRequestController::class, 'getReport']);
         Route::patch('{id}/update-result', [LabRequestController::class, 'updateResult'])->middleware("role:SUPER-ADMIN,LAB-TECHNOLOGIST,RADIOLOGIST");
-        // Route::get('/lab-tests', [LabRequestController::class, 'findAllLabRequests']);
         Route::get('/radiology-tests', [LabRequestController::class, 'findAllRadiologyRequests']);
         Route::get('/radiology-requests', [LabRequestController::class, 'findAllRadiologyRequests'])->middleware("role:SUPER-ADMIN,RADIOLOGIST");
         Route::get('/lab-requests', [LabRequestController::class, 'findAllLabRequests']);
@@ -375,7 +372,6 @@ Route::middleware("auth:sanctum")->group(function () {
         Route::get('{id}', [LabRequestController::class, 'findOne']);
         Route::patch('{id}/lab-request', [LabRequestController::class, 'update'])->middleware("role:SUPER-ADMIN,LAB-TECHNOLOGIST");
         Route::patch('{id}/radiology-request', [LabRequestController::class, 'updateRadiology'])->middleware("role:SUPER-ADMIN,RADIOLOGIST");
-        // Route::delete('{id}', [LabRequestController::class, 'destroy']);
     });
 
     Route::prefix('stock-reports')->group(function () {

@@ -1611,7 +1611,6 @@ class LabRequestController extends Controller
                 'treatment.createdBy:id,firstname,lastname'
             ])->whereHas('service', fn($q) => $q->where('type', 'LAB-TEST'));;
 
-
             if ($type === 'RESULT-AVAILABLE') {
                 $query->whereHas('diagnosticResults');
             } elseif ($type === 'RESULT-NOT-AVAILABLE') {

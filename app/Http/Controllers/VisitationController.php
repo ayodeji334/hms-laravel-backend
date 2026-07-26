@@ -519,21 +519,15 @@ class VisitationController extends Controller
         $validated = $request->validate(
             [
                 'patient' => ['required', 'integer'],
-                'assigned_doctor' => ['required', 'integer'],
                 'payment_reference' => ['required', 'string'],
                 'date' => ['required', 'date_format:Y-m-d'],
-                'time' => ['required', 'regex:/^([01][0-9]|2[0-3]):[0-5][0-9]$/'],
             ],
             [
                 'patient.required' => 'Patient detail is required',
                 'patient.integer' => 'Patient detail contains invalid data',
-                'assigned_doctor.required' => 'Assigned doctor detail is required',
-                'assigned_doctor.integer' => 'Assigned doctor detail contains invalid data',
                 'payment_reference.required' => 'Payment reference detail is required',
                 'date.required' => 'Date is required',
                 'date.date_format' => 'Date contains invalid data',
-                'time.required' => 'Time is required',
-                'time.regex' => 'Time is invalid',
             ]
         );
 
@@ -545,75 +539,86 @@ class VisitationController extends Controller
                 throw new BadRequestHttpException('Patient detail not found');
             }
 
-            $doctor = User::find($validated['assigned_doctor']);
-            if (!$doctor) {
-                throw new BadRequestHttpException('Assigned doctor detail not found');
-            }
+            return DB::transaction(function () use ($validated, $staff, $patient) {
+                // Lock today's visitation rows so two concurrent requests can't
+                // both read the same "last" visitation and pick the same slot.
+                $lastVisitation = Visitation::where('start_date', $validated['date'])
+                    ->orderByDesc('end_time')
+                    ->lockForUpdate()
+                    ->first();
 
-            $overlappingVisitations = $this->findOverlapVisitations($validated['date'], $validated['time']);
-            if ($overlappingVisitations->count() > 0) {
-                throw new BadRequestHttpException('The visitation overlaps with others');
-            }
+                if ($lastVisitation) {
+                    // Handles Carbon instances, "H:i:s", and "H:i" strings alike
+                    $time = Carbon::parse($lastVisitation->end_time)->format('H:i');
+                } else {
+                    $time = now()->format('H:i');
+                }
 
-            $patientTodayVisitations = $this->findNumberOfVisitationsForPatient($patient->id, $validated['date']);
-            if ($patientTodayVisitations->count() > 1) {
-                throw new BadRequestHttpException('Patient cannot book a visitation more than twice per day');
-            }
+                // Never schedule into the past if the day's last slot has already gone by.
+                if ($validated['date'] === now()->toDateString()) {
+                    $time = max($time, now()->format('H:i'));
+                }
 
-            $payment = Payment::with('service')->where('transaction_reference', $validated['payment_reference'])->first();
+                $endTime = Carbon::createFromFormat('H:i', $time)->addMinutes(20)->format('H:i');
 
-            if (!$payment) {
-                throw new BadRequestHttpException('Payment detail not found');
-            }
+                if ($endTime > '17:00') { // adjust to your clinic's operating hours, or remove
+                    throw new BadRequestHttpException('No more visitation slots available for today');
+                }
 
-            Log::info($payment->patient_id);
+                $patientTodayVisitations = $this->findNumberOfVisitationsForPatient($patient->id, $validated['date']);
+                if ($patientTodayVisitations->count() > 1) {
+                    throw new BadRequestHttpException('Patient cannot book a visitation more than twice per day');
+                }
 
-            if ($payment->patient_id != $validated["patient"]) {
-                throw new BadRequestHttpException('Payment reference is not for the selected patient');
-            }
+                $payment = Payment::with('service')->where('transaction_reference', $validated['payment_reference'])->first();
 
-            if ($payment->is_used) {
-                throw new BadRequestHttpException('You need to make a payment. The reference has been used before');
-            }
+                if (!$payment) {
+                    throw new BadRequestHttpException('Payment detail not found');
+                }
 
-            if ($payment->status != PaymentStatus::COMPLETED->value) {
-                throw new BadRequestHttpException('You need to make a payment before you can continue');
-            }
+                if ($payment->patient_id != $validated["patient"]) {
+                    throw new BadRequestHttpException('Payment reference is not for the selected patient');
+                }
 
-            if ($payment->payable_type != Visitation::class) {
-                throw new BadRequestHttpException('This payment is not intended for visitation');
-            }
+                if ($payment->is_used) {
+                    throw new BadRequestHttpException('You need to make a payment. The reference has been used before');
+                }
 
-            $endTime = Carbon::createFromFormat('H:i', $validated['time'])->addMinutes(20)->format('H:i');
+                if ($payment->status != PaymentStatus::COMPLETED->value) {
+                    throw new BadRequestHttpException('You need to make a payment before you can continue');
+                }
 
-            $visitation = new Visitation();
-            $visitation->end_time = $endTime;
-            $visitation->start_date = $validated['date'];
-            $visitation->start_time = $validated['time'];
-            $visitation->history = json_encode([
-                [
-                    'title' => VisitationStatus::PENDING,
-                    'date' => now(),
-                    'created_by' => $staff->fullname,
-                    'staff_detail' => $staff->staff_id,
-                ]
-            ]);
-            $visitation->assignedDoctor()->associate($doctor);
-            $visitation->patient()->associate($patient);
-            $visitation->createdBy()->associate($staff);
-            $visitation->lastUpdatedBy()->associate($staff);
-            $visitation->save();
+                if ($payment->payable_type != Visitation::class) {
+                    throw new BadRequestHttpException('This payment is not intended for visitation');
+                }
 
-            // Associate the payment after visitation is saved
-            $payment->payable_id = $visitation->id;
-            $payment->is_used = true;
-            $payment->save();
+                $visitation = new Visitation();
+                $visitation->end_time = $endTime;
+                $visitation->start_date = $validated['date'];
+                $visitation->start_time = $time;
+                $visitation->history = json_encode([
+                    [
+                        'title' => VisitationStatus::PENDING,
+                        'date' => now(),
+                        'created_by' => $staff->fullname,
+                        'staff_detail' => $staff->staff_id,
+                    ]
+                ]);
+                $visitation->patient()->associate($patient);
+                $visitation->createdBy()->associate($staff);
+                $visitation->lastUpdatedBy()->associate($staff);
+                $visitation->save();
 
-            return response()->json([
-                'message' => 'Visitation created successfully',
-                'status' => 'success',
-                'success' => true,
-            ]);
+                $payment->payable_id = $visitation->id;
+                $payment->is_used = true;
+                $payment->save();
+
+                return response()->json([
+                    'message' => 'Visitation created successfully',
+                    'status' => 'success',
+                    'success' => true,
+                ]);
+            });
         } catch (BadRequestHttpException $e) {
             Log::error('Error creating visitation: ' . $e->getMessage());
             return response()->json([
@@ -627,6 +632,107 @@ class VisitationController extends Controller
         }
     }
 
+    // public function create(Request $request)
+    // {
+    //     $validated = $request->validate(
+    //         [
+    //             'patient' => ['required', 'integer'],
+    //             'payment_reference' => ['required', 'string'],
+    //             'date' => ['required', 'date_format:Y-m-d'],
+    //             // 'time' => ['required', 'regex:/^([01][0-9]|2[0-3]):[0-5][0-9]$/'],
+    //         ],
+    //         [
+    //             'patient.required' => 'Patient detail is required',
+    //             'patient.integer' => 'Patient detail contains invalid data',
+    //             'payment_reference.required' => 'Payment reference detail is required',
+    //             'date.required' => 'Date is required',
+    //             'date.date_format' => 'Date contains invalid data',
+    //             // 'time.required' => 'Time is required',
+    //             // 'time.regex' => 'Time is invalid',
+    //         ]
+    //     );
+
+    //     try {
+    //         $staff = Auth::user();
+
+    //         $patient = Patient::find($validated['patient']);
+    //         if (!$patient) {
+    //             throw new BadRequestHttpException('Patient detail not found');
+    //         }
+
+    //         $overlappingVisitations = $this->findOverlapVisitations($validated['date'], $validated['time']);
+    //         if ($overlappingVisitations->count() > 0) {
+    //             throw new BadRequestHttpException('The visitation overlaps with others');
+    //         }
+
+    //         $patientTodayVisitations = $this->findNumberOfVisitationsForPatient($patient->id, $validated['date']);
+    //         if ($patientTodayVisitations->count() > 1) {
+    //             throw new BadRequestHttpException('Patient cannot book a visitation more than twice per day');
+    //         }
+
+    //         $payment = Payment::with('service')->where('transaction_reference', $validated['payment_reference'])->first();
+
+    //         if (!$payment) {
+    //             throw new BadRequestHttpException('Payment detail not found');
+    //         }
+
+    //         if ($payment->patient_id != $validated["patient"]) {
+    //             throw new BadRequestHttpException('Payment reference is not for the selected patient');
+    //         }
+
+    //         if ($payment->is_used) {
+    //             throw new BadRequestHttpException('You need to make a payment. The reference has been used before');
+    //         }
+
+    //         if ($payment->status != PaymentStatus::COMPLETED->value) {
+    //             throw new BadRequestHttpException('You need to make a payment before you can continue');
+    //         }
+
+    //         if ($payment->payable_type != Visitation::class) {
+    //             throw new BadRequestHttpException('This payment is not intended for visitation');
+    //         }
+
+    //         $endTime = Carbon::createFromFormat('H:i', $validated['time'])->addMinutes(20)->format('H:i');
+
+    //         $visitation = new Visitation();
+    //         $visitation->end_time = $endTime;
+    //         $visitation->start_date = $validated['date'];
+    //         $visitation->start_time = $validated['time'];
+    //         $visitation->history = json_encode([
+    //             [
+    //                 'title' => VisitationStatus::PENDING,
+    //                 'date' => now(),
+    //                 'created_by' => $staff->fullname,
+    //                 'staff_detail' => $staff->staff_id,
+    //             ]
+    //         ]);
+    //         $visitation->patient()->associate($patient);
+    //         $visitation->createdBy()->associate($staff);
+    //         $visitation->lastUpdatedBy()->associate($staff);
+    //         $visitation->save();
+
+    //         $payment->payable_id = $visitation->id;
+    //         $payment->is_used = true;
+    //         $payment->save();
+
+    //         return response()->json([
+    //             'message' => 'Visitation created successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (BadRequestHttpException $e) {
+    //         Log::error('Error creating visitation: ' . $e->getMessage());
+    //         return response()->json([
+    //             'message' => $e->getMessage(),
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 400);
+    //     } catch (Exception $e) {
+    //         Log::error($e->getMessage());
+    //         throw new HttpException(500, 'Something went wrong. Try again');
+    //     }
+    // }
+
     public function findAll(Request $request): JsonResponse
     {
         try {
@@ -634,6 +740,7 @@ class VisitationController extends Controller
             $status = $request->get('status', '');
             $q = $request->get('q', '');
             $limit = $request->get('limit', 50);
+            $todayOnly = $request->boolean('today', false);
 
             $queryBuilder = Visitation::with(['assignedDoctor', 'patient', 'recommendedTests.service', 'payment'])
                 ->orderByDesc('updated_at')
@@ -653,7 +760,12 @@ class VisitationController extends Controller
             }
 
             if ($user->role == Roles::DOCTOR->value) {
-                $queryBuilder->where('assigned_doctor_id', $user->id);
+                // $queryBuilder->where('assigned_doctor_id', $user->id);
+
+                // Doctors default to seeing only today's visitations
+                $queryBuilder->whereDate('start_date', now()->toDateString());
+            } elseif ($todayOnly) {
+                $queryBuilder->whereDate('start_date', now()->toDateString());
             }
 
             // if ($user->role === Roles::NURSE) {
@@ -676,6 +788,169 @@ class VisitationController extends Controller
             throw new HttpException(500, 'Something went wrong. Try again later');
         }
     }
+
+    // // public function create(Request $request): JsonResponse
+    // // {
+    // //     $validated = $request->validate(
+    // //         [
+    // //             'patient' => ['required', 'integer'],
+    // //             'assigned_doctor' => ['required', 'integer'],
+    // //             'payment_reference' => ['required', 'string'],
+    // //             'date' => ['required', 'date_format:Y-m-d'],
+    // //             'time' => ['required', 'regex:/^([01][0-9]|2[0-3]):[0-5][0-9]$/'],
+    // //         ],
+    // //         [
+    // //             'patient.required' => 'Patient detail is required',
+    // //             'patient.integer' => 'Patient detail contains invalid data',
+    // //             'assigned_doctor.required' => 'Assigned doctor detail is required',
+    // //             'assigned_doctor.integer' => 'Assigned doctor detail contains invalid data',
+    // //             'payment_reference.required' => 'Payment reference detail is required',
+    // //             'date.required' => 'Date is required',
+    // //             'date.date_format' => 'Date contains invalid data',
+    // //             'time.required' => 'Time is required',
+    // //             'time.regex' => 'Time is invalid',
+    // //         ]
+    // //     );
+
+    // //     try {
+    // //         $staff = Auth::user();
+
+    // //         $patient = Patient::find($validated['patient']);
+    // //         if (!$patient) {
+    // //             throw new BadRequestHttpException('Patient detail not found');
+    // //         }
+
+    // //         $doctor = User::find($validated['assigned_doctor']);
+    // //         if (!$doctor) {
+    // //             throw new BadRequestHttpException('Assigned doctor detail not found');
+    // //         }
+
+    // //         $overlappingVisitations = $this->findOverlapVisitations($validated['date'], $validated['time']);
+    // //         if ($overlappingVisitations->count() > 0) {
+    // //             throw new BadRequestHttpException('The visitation overlaps with others');
+    // //         }
+
+    // //         $patientTodayVisitations = $this->findNumberOfVisitationsForPatient($patient->id, $validated['date']);
+    // //         if ($patientTodayVisitations->count() > 1) {
+    // //             throw new BadRequestHttpException('Patient cannot book a visitation more than twice per day');
+    // //         }
+
+    // //         $payment = Payment::with('service')->where('transaction_reference', $validated['payment_reference'])->first();
+
+    // //         if (!$payment) {
+    // //             throw new BadRequestHttpException('Payment detail not found');
+    // //         }
+
+    // //         Log::info($payment->patient_id);
+
+    // //         if ($payment->patient_id != $validated["patient"]) {
+    // //             throw new BadRequestHttpException('Payment reference is not for the selected patient');
+    // //         }
+
+    // //         if ($payment->is_used) {
+    // //             throw new BadRequestHttpException('You need to make a payment. The reference has been used before');
+    // //         }
+
+    // //         if ($payment->status != PaymentStatus::COMPLETED->value) {
+    // //             throw new BadRequestHttpException('You need to make a payment before you can continue');
+    // //         }
+
+    // //         if ($payment->payable_type != Visitation::class) {
+    // //             throw new BadRequestHttpException('This payment is not intended for visitation');
+    // //         }
+
+    // //         $endTime = Carbon::createFromFormat('H:i', $validated['time'])->addMinutes(20)->format('H:i');
+
+    // //         $visitation = new Visitation();
+    // //         $visitation->end_time = $endTime;
+    // //         $visitation->start_date = $validated['date'];
+    // //         $visitation->start_time = $validated['time'];
+    // //         $visitation->history = json_encode([
+    // //             [
+    // //                 'title' => VisitationStatus::PENDING,
+    // //                 'date' => now(),
+    // //                 'created_by' => $staff->fullname,
+    // //                 'staff_detail' => $staff->staff_id,
+    // //             ]
+    // //         ]);
+    // //         $visitation->assignedDoctor()->associate($doctor);
+    // //         $visitation->patient()->associate($patient);
+    // //         $visitation->createdBy()->associate($staff);
+    // //         $visitation->lastUpdatedBy()->associate($staff);
+    // //         $visitation->save();
+
+    // //         // Associate the payment after visitation is saved
+    // //         $payment->payable_id = $visitation->id;
+    // //         $payment->is_used = true;
+    // //         $payment->save();
+
+    // //         return response()->json([
+    // //             'message' => 'Visitation created successfully',
+    // //             'status' => 'success',
+    // //             'success' => true,
+    // //         ]);
+    // //     } catch (BadRequestHttpException $e) {
+    // //         Log::error('Error creating visitation: ' . $e->getMessage());
+    // //         return response()->json([
+    // //             'message' => $e->getMessage(),
+    // //             'status' => 'error',
+    // //             'success' => false,
+    // //         ], 400);
+    // //     } catch (Exception $e) {
+    // //         Log::error($e->getMessage());
+    // //         throw new HttpException(500, 'Something went wrong. Try again');
+    // //     }
+    // // }
+
+    // public function findAll(Request $request): JsonResponse
+    // {
+    //     try {
+    //         $user = Auth::user();
+    //         $status = $request->get('status', '');
+    //         $q = $request->get('q', '');
+    //         $limit = $request->get('limit', 50);
+
+    //         $queryBuilder = Visitation::with(['assignedDoctor', 'patient', 'recommendedTests.service', 'payment'])
+    //             ->orderByDesc('updated_at')
+    //             ->when($q, function ($query, $q) {
+    //                 $query->whereHas('patient', function ($patientQ) use ($q) {
+    //                     $patientQ->where(function ($qb) use ($q) {
+    //                         $qb->where('firstname', 'LIKE', "%{$q}%")
+    //                             ->orWhere('lastname',  'LIKE', "%{$q}%")
+    //                             ->orWhere('phone_number', 'LIKE', "%{$q}%")
+    //                             ->orWhere('patient_reg_no', 'LIKE', "%{$q}%");
+    //                     });
+    //                 });
+    //             });
+
+    //         if (!empty($status) && strtoupper($status) != 'ALL') {
+    //             $queryBuilder->where('status', $status);
+    //         }
+
+    //         if ($user->role == Roles::DOCTOR->value) {
+    //             $queryBuilder->where('assigned_doctor_id', $user->id);
+    //         }
+
+    //         // if ($user->role === Roles::NURSE) {
+    //         //     $queryBuilder->whereHas('assigned_doctor.assigned_branch', fn($q) => $q->where('id', $user->assigned_branch->id));
+    //         // }
+
+    //         $visitations = $queryBuilder->paginate($limit);
+
+    //         return response()->json([
+    //             'message' => 'Visitations fetched successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //             'data' => $visitations,
+    //         ]);
+    //     } catch (HttpException $e) {
+    //         Log::error('Error fetching visitations: ' . $e->getMessage());
+    //         throw $e;
+    //     } catch (Exception $e) {
+    //         Log::error('Unexpected error: ' . $e->getMessage());
+    //         throw new HttpException(500, 'Something went wrong. Try again later');
+    //     }
+    // }
 
     public function findOne($id)
     {
@@ -744,7 +1019,6 @@ class VisitationController extends Controller
         }
     }
 
-
     // public function findOne($id)
     // {
     //     try {
@@ -806,6 +1080,58 @@ class VisitationController extends Controller
     //     }
     // }
 
+    // public function accept($id)
+    // {
+    //     try {
+    //         $user = Auth::user();
+    //         $visitation = Visitation::find($id);
+
+    //         if (!$visitation) {
+    //             throw new BadRequestHttpException('The Visitation detail not found');
+    //         }
+
+    //         Log::info($visitation->status);
+
+    //         if ($visitation->status == VisitationStatus::ACCEPTED->value) {
+    //             return response()->json([
+    //                 'message' => 'Visitation already marked as accepted',
+    //                 'status' => 'error',
+    //                 'success' => false,
+    //             ], 400);
+    //         }
+
+    //         Log::info("Authenticated user id: $user->id, Assigned Doctor Id: $visitation->assigned_doctor_id");
+
+    //         if ($user->id != $visitation->assigned_doctor_id) {
+    //             return response()->json([
+    //                 'message' => "You cannot accept because the visitation was not assigned to you.",
+    //                 'status' => 'error',
+    //                 'success' => false,
+    //             ], 400);
+    //         }
+
+    //         $visitation->status = VisitationStatus::ACCEPTED;
+    //         $visitation->save();
+
+    //         return response()->json([
+    //             'message' => 'Visitation Updated Successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (BadRequestHttpException $e) {
+    //         Log::info('Error accepting Visitation: ' . $e->getMessage());
+    //         throw $e;
+    //     } catch (Exception $e) {
+    //         Log::info('Unexpected error: ' . $e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
+
+
     public function accept($id)
     {
         try {
@@ -816,7 +1142,9 @@ class VisitationController extends Controller
                 throw new BadRequestHttpException('The Visitation detail not found');
             }
 
-            Log::info($visitation->status);
+            if ($user->role != Roles::DOCTOR->value && $user !== Roles::SUPER_ADMIN) {
+                throw new BadRequestHttpException('Only the doctor or manager can accept a visitation');
+            }
 
             if ($visitation->status == VisitationStatus::ACCEPTED->value) {
                 return response()->json([
@@ -826,16 +1154,16 @@ class VisitationController extends Controller
                 ], 400);
             }
 
-            Log::info("Authenticated user id: $user->id, Assigned Doctor Id: $visitation->assigned_doctor_id");
-
-            if ($user->id != $visitation->assigned_doctor_id) {
+            // Once a doctor has claimed it, no one else can accept it.
+            if ($visitation->assigned_doctor_id !== null && $visitation->assigned_doctor_id != $user->id) {
                 return response()->json([
-                    'message' => "You cannot accept because the visitation was not assigned to you.",
+                    'message' => 'This visitation has already been accepted by another doctor.',
                     'status' => 'error',
                     'success' => false,
                 ], 400);
             }
 
+            $visitation->assignedDoctor()->associate($user);
             $visitation->status = VisitationStatus::ACCEPTED;
             $visitation->save();
 
@@ -856,7 +1184,6 @@ class VisitationController extends Controller
             ], 500);
         }
     }
-
     public function reschedule(Request $request, $id): JsonResponse
     {
         $validated = $request->validate(
@@ -1003,6 +1330,9 @@ class VisitationController extends Controller
 
             $today = Carbon::today()->format('Y-m-d');
 
+            $today = Carbon::today()->format('Y-m-d');
+            Log::info('Computed today: ' . $today . ' | App timezone: ' . config('app.timezone') . ' | Server time: ' . now());
+
             $query = Visitation::with([
                 'assignedDoctor',
                 'patient.vitalSigns' => function ($query) {
@@ -1010,9 +1340,9 @@ class VisitationController extends Controller
                 }
             ])->whereDate('start_date', $today);
 
-            if ($user->role === 'DOCTOR') {
-                $query->where('assigned_doctor_id', $user->id);
-            }
+            // if ($user->role === 'DOCTOR') {
+            //     $query->where('assigned_doctor_id', $user->id);
+            // }
 
             if ($user->role === 'NURSE' && $user->assigned_branch_id) {
                 $query->whereHas('assignedDoctor.assignedBranch', function ($q) use ($user) {
