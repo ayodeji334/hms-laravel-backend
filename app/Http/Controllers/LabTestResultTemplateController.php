@@ -15,13 +15,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Exception\BadRequestException;
 
 class LabTestResultTemplateController extends Controller
 {
     public function create(Request $request)
     {
-
         $request->validate([
             'name' => ['required', 'string', 'unique:lab_test_result_templates,name'],
             'is_save_to_draft' => ['required', 'boolean'],
@@ -88,7 +88,7 @@ class LabTestResultTemplateController extends Controller
                 foreach ($tableData['rows'] ?? [] as $index => $row) {
                     LabTestTemplateTableRow::create([
                         'table_id' => $table->id,
-                        'values' => $row['values'],
+                        'values' => $row['values'] ?? [],
                         'index' => $index,
                     ]);
                 }
@@ -96,8 +96,8 @@ class LabTestResultTemplateController extends Controller
                 foreach ($tableData['columns'] ?? [] as $index => $column) {
                     LabTestTemplateTableColumn::create([
                         'table_id' => $table->id,
-                        'header' => $column['header'],
-                        'sub_columns' => $column['subColumns'],
+                        'header' => $column['header'] ?? '',
+                        'sub_columns' => $column['subColumns'] ?? [],
                         'index' => $index,
                     ]);
                 }
@@ -113,7 +113,7 @@ class LabTestResultTemplateController extends Controller
                     foreach ($rowCat['rows'] ?? [] as $rowIndex => $row) {
                         LabTestTemplateTableRowCategoryRow::create([
                             'category_id' => $category->id,
-                            'values' => $row['values'],
+                            'values' => $row['values'] ?? [],
                             'index' => $rowIndex,
                         ]);
                     }
@@ -121,15 +121,14 @@ class LabTestResultTemplateController extends Controller
             }
 
             // Handle categories
-            foreach ($request['categories'] ?? [] as $catData) {
+            foreach ($request['categories'] ?? [] as $catIndex => $catData) {
                 $category = new LabTestTemplateCategory([
                     'name' => $catData['name'],
                     'input_fields' => $catData['input_fields'] ?? [],
-                    'template_id' => $template->id
+                    'template_id' => $template->id,
+                    'index' => $catIndex,
                 ]);
                 $category->save();
-
-                // $template->categories()->attach($category->id);
 
                 foreach ($catData['tables'] ?? [] as $tableData) {
                     $table = new LabTestTemplateTable();
@@ -139,7 +138,7 @@ class LabTestResultTemplateController extends Controller
                     foreach ($tableData['rows'] ?? [] as $index => $row) {
                         LabTestTemplateTableRow::create([
                             'table_id' => $table->id,
-                            'values' => $row['values'] ?? "",
+                            'values' => $row['values'] ?? [],
                             'index' => $index,
                         ]);
                     }
@@ -147,24 +146,24 @@ class LabTestResultTemplateController extends Controller
                     foreach ($tableData['columns'] ?? [] as $index => $column) {
                         LabTestTemplateTableColumn::create([
                             'table_id' => $table->id,
-                            'header' => $column['header'] ?? "",
-                            'sub_columns' => $column['subColumns'] ?? '',
+                            'header' => $column['header'] ?? '',
+                            'sub_columns' => $column['subColumns'] ?? [],
                             'index' => $index,
                         ]);
                     }
 
-                    foreach ($tableData['row_categories'] ?? [] as $catIndex => $rowCat) {
+                    foreach ($tableData['row_categories'] ?? [] as $rcIndex => $rowCat) {
                         $categoryRow = new LabTestTemplateTableRowCategory([
                             'table_id' => $table->id,
                             'name' => $rowCat['name'],
-                            'index' => $catIndex,
+                            'index' => $rcIndex,
                         ]);
                         $categoryRow->save();
 
                         foreach ($rowCat['rows'] ?? [] as $rowIndex => $row) {
                             LabTestTemplateTableRowCategoryRow::create([
                                 'category_id' => $categoryRow->id,
-                                'values' => $row['values'],
+                                'values' => $row['values'] ?? [],
                                 'index' => $rowIndex,
                             ]);
                         }
@@ -190,6 +189,178 @@ class LabTestResultTemplateController extends Controller
             ], 500);
         }
     }
+
+    // public function create(Request $request)
+    // {
+
+    //     $request->validate([
+    //         'name' => ['required', 'string', 'unique:lab_test_result_templates,name'],
+    //         'is_save_to_draft' => ['required', 'boolean'],
+
+    //         'input_fields' => ['nullable', 'array'],
+    //         'input_fields.*.fieldName' => ['present', 'string', 'nullable'],
+    //         'input_fields.*.value' => ['present', 'string', 'nullable'],
+
+    //         'tables' => ['nullable', 'array'],
+    //         'tables.*.columns' => ['present', 'array'],
+    //         'tables.*.columns.*.header' => ['present', 'string', 'nullable'],
+    //         'tables.*.columns.*.subColumns' => ['nullable', 'array'],
+    //         'tables.*.columns.*.subColumns.*' => ['present', 'string', 'nullable'],
+
+    //         'tables.*.rows' => ['present', 'array'],
+    //         'tables.*.rows.*.values' => ['present', 'array'],
+    //         'tables.*.rows.*.values.*' => ['present', 'string', 'nullable'],
+
+    //         'tables.*.row_categories' => ['nullable', 'array'],
+    //         'tables.*.row_categories.*.name' => ['present', 'string', 'nullable'],
+    //         'tables.*.row_categories.*.rows' => ['present', 'array'],
+    //         'tables.*.row_categories.*.rows.*.values' => ['present', 'array'],
+    //         'tables.*.row_categories.*.rows.*.values.*' => ['present', 'string', 'nullable'],
+
+    //         'categories' => ['nullable', 'array'],
+    //         'categories.*.name' => ['present', 'string', 'nullable'],
+    //         'categories.*.input_fields' => ['nullable', 'array'],
+    //         'categories.*.input_fields.*.fieldName' => ['present', 'string', 'nullable'],
+    //         'categories.*.input_fields.*.value' => ['present', 'string', 'nullable'],
+
+    //         'categories.*.tables' => ['present', 'array'],
+    //         'categories.*.tables.*.columns' => ['present', 'array'],
+    //         'categories.*.tables.*.columns.*.header' => ['present', 'string', 'nullable'],
+    //         'categories.*.tables.*.columns.*.subColumns' => ['nullable', 'array'],
+    //         'categories.*.tables.*.columns.*.subColumns.*' => ['present', 'string', 'nullable'],
+
+    //         'categories.*.tables.*.rows' => ['present', 'array'],
+    //         'categories.*.tables.*.rows.*.values' => ['present', 'array'],
+    //         'categories.*.tables.*.rows.*.values.*' => ['present', 'string', 'nullable'],
+
+    //         'categories.*.tables.*.row_categories' => ['nullable', 'array'],
+    //         'categories.*.tables.*.row_categories.*.name' => ['present', 'string', 'nullable'],
+    //         'categories.*.tables.*.row_categories.*.rows' => ['present', 'array'],
+    //         'categories.*.tables.*.row_categories.*.rows.*.values' => ['present', 'array'],
+    //         'categories.*.tables.*.row_categories.*.rows.*.values.*' => ['present', 'string', 'nullable'],
+    //     ]);
+
+    //     try {
+    //         DB::beginTransaction();
+
+    //         $template = new LabTestResultTemplate();
+    //         $template->name = $request['name'];
+    //         $template->added_by_id = Auth::id();
+    //         $template->last_updated_by_id = Auth::id();
+    //         $template->input_fields = $request['input_fields'] ?? [];
+    //         $template->save();
+
+    //         // Handle plain tables
+    //         foreach ($request['tables'] ?? [] as $tableData) {
+    //             $table = new LabTestTemplateTable();
+    //             $table->template_id = $template->id;
+    //             $table->save();
+
+    //             foreach ($tableData['rows'] ?? [] as $index => $row) {
+    //                 LabTestTemplateTableRow::create([
+    //                     'table_id' => $table->id,
+    //                     'values' => $row['values'],
+    //                     'index' => $index,
+    //                 ]);
+    //             }
+
+    //             foreach ($tableData['columns'] ?? [] as $index => $column) {
+    //                 LabTestTemplateTableColumn::create([
+    //                     'table_id' => $table->id,
+    //                     'header' => $column['header'],
+    //                     'sub_columns' => $column['subColumns'],
+    //                     'index' => $index,
+    //                 ]);
+    //             }
+
+    //             foreach ($tableData['row_categories'] ?? [] as $catIndex => $rowCat) {
+    //                 $category = new LabTestTemplateTableRowCategory([
+    //                     'table_id' => $table->id,
+    //                     'name' => $rowCat['name'],
+    //                     'index' => $catIndex,
+    //                 ]);
+    //                 $category->save();
+
+    //                 foreach ($rowCat['rows'] ?? [] as $rowIndex => $row) {
+    //                     LabTestTemplateTableRowCategoryRow::create([
+    //                         'category_id' => $category->id,
+    //                         'values' => $row['values'],
+    //                         'index' => $rowIndex,
+    //                     ]);
+    //                 }
+    //             }
+    //         }
+
+    //         // Handle categories
+    //         foreach ($request['categories'] ?? [] as $catData) {
+    //             $category = new LabTestTemplateCategory([
+    //                 'name' => $catData['name'],
+    //                 'input_fields' => $catData['input_fields'] ?? [],
+    //                 'template_id' => $template->id
+    //             ]);
+    //             $category->save();
+
+    //             // $template->categories()->attach($category->id);
+
+    //             foreach ($catData['tables'] ?? [] as $tableData) {
+    //                 $table = new LabTestTemplateTable();
+    //                 $table->category_id = $category->id;
+    //                 $table->save();
+
+    //                 foreach ($tableData['rows'] ?? [] as $index => $row) {
+    //                     LabTestTemplateTableRow::create([
+    //                         'table_id' => $table->id,
+    //                         'values' => $row['values'] ?? "",
+    //                         'index' => $index,
+    //                     ]);
+    //                 }
+
+    //                 foreach ($tableData['columns'] ?? [] as $index => $column) {
+    //                     LabTestTemplateTableColumn::create([
+    //                         'table_id' => $table->id,
+    //                         'header' => $column['header'] ?? "",
+    //                         'sub_columns' => $column['subColumns'] ?? '',
+    //                         'index' => $index,
+    //                     ]);
+    //                 }
+
+    //                 foreach ($tableData['row_categories'] ?? [] as $catIndex => $rowCat) {
+    //                     $categoryRow = new LabTestTemplateTableRowCategory([
+    //                         'table_id' => $table->id,
+    //                         'name' => $rowCat['name'],
+    //                         'index' => $catIndex,
+    //                     ]);
+    //                     $categoryRow->save();
+
+    //                     foreach ($rowCat['rows'] ?? [] as $rowIndex => $row) {
+    //                         LabTestTemplateTableRowCategoryRow::create([
+    //                             'category_id' => $categoryRow->id,
+    //                             'values' => $row['values'],
+    //                             'index' => $rowIndex,
+    //                         ]);
+    //                     }
+    //                 }
+    //             }
+    //         }
+
+    //         DB::commit();
+
+    //         return response()->json([
+    //             'message' => 'Template created successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (Exception $e) {
+    //         DB::rollBack();
+    //         Log::error('Template creation failed: ' . $e->getMessage());
+
+    //         return response()->json([
+    //             'message' => $e->getMessage(),
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
 
     public function findAll(Request $request)
     {
@@ -286,49 +457,243 @@ class LabTestResultTemplateController extends Controller
         }
     }
 
+    // public function update(string $id, Request $request)
+    // {
+    //     DB::beginTransaction();
+    //     try {
+    //         $existing = LabTestResultTemplate::where('name', $request->name)
+    //             ->where('id', '!=', $id)
+    //             ->exists();
+
+    //         if ($existing) {
+    //             return response()->json([
+    //                 'message' => 'Template name already exist',
+    //                 'status' => 'error',
+    //                 'success' => true,
+    //             ], 400);
+    //         }
+
+    //         $template = LabTestResultTemplate::with(['tables', 'categories.tables'])->findOrFail($id);
+
+    //         // $template->update([
+    //         //     'name' => $request->name,
+    //         //     'input_fields' => $request->input_fields,
+    //         //     'last_updated_by_id' => Auth::id(),
+    //         // ]);
+    //         $template->name = $request->name;
+    //         $template->input_fields = $request->input_fields;
+    //         $template->last_updated_by_id = Auth::id();
+    //         $template->save();
+
+    //         // Delete previous related records
+    //         LabTestTemplateTable::where('template_id', $template->id)->delete();
+    //         LabTestTemplateCategory::where('template_id', $template->id)->delete();
+
+    //         // Handle plain tables
+    //         foreach ($request['tables'] ?? [] as $tableData) {
+    //             $table = new LabTestTemplateTable();
+    //             $table->template_id = $template->id;
+    //             $table->index = $tableData['index'] ?? null;
+    //             $table->save();
+
+    //             foreach ($tableData['rows'] ?? [] as $index => $row) {
+    //                 LabTestTemplateTableRow::create([
+    //                     'table_id' => $table->id,
+    //                     'values' => $row['values'] ?? "",
+    //                     'index' => $index,
+    //                 ]);
+    //             }
+
+    //             foreach ($tableData['columns'] ?? [] as $index => $column) {
+    //                 LabTestTemplateTableColumn::create([
+    //                     'table_id' => $table->id,
+    //                     'header' => $column['header'] ?? '',
+    //                     'sub_columns' => $column['sub_columns'],
+    //                     'index' => $index,
+    //                 ]);
+    //             }
+
+    //             foreach ($tableData['row_categories'] ?? [] as $catIndex => $rowCat) {
+    //                 $category = new LabTestTemplateTableRowCategory([
+    //                     'table_id' => $table->id,
+    //                     'name' => $rowCat['name'],
+    //                     'index' => $catIndex,
+    //                 ]);
+    //                 $category->save();
+
+    //                 foreach ($rowCat['rows'] ?? [] as $rowIndex => $row) {
+    //                     LabTestTemplateTableRowCategoryRow::create([
+    //                         'category_id' => $category->id,
+    //                         'values' => $row['values'],
+    //                         'index' => $rowIndex,
+    //                     ]);
+    //                 }
+    //             }
+    //         }
+
+    //         // Handle categories
+    //         foreach ($request['categories'] ?? [] as $catIndex => $catData) {
+    //             $category = new LabTestTemplateCategory([
+    //                 'name' => $catData['name'],
+    //                 'input_fields' => $catData['input_fields'] ?? [],
+    //                 'template_id' => $template->id,
+    //                 'index' => $catIndex,
+    //             ]);
+    //             $category->save();
+
+    //             foreach ($catData['tables'] ?? [] as $tableData) {
+    //                 $table = new LabTestTemplateTable();
+    //                 $table->category_id = $category->id;
+    //                 $table->index = $tableData['index'] ?? null;
+    //                 $table->save();
+
+    //                 foreach ($tableData['rows'] ?? [] as $index => $row) {
+    //                     LabTestTemplateTableRow::create([
+    //                         'table_id' => $table->id,
+    //                         'values' => $row['values'] ?? "",
+    //                         'index' => $index,
+    //                     ]);
+    //                 }
+
+    //                 foreach ($tableData['columns'] ?? [] as $index => $column) {
+    //                     LabTestTemplateTableColumn::create([
+    //                         'table_id' => $table->id,
+    //                         'header' => $column['header'] ?? "",
+    //                         'sub_columns' => $column['subColumns'] ?? '',
+    //                         'index' => $index,
+    //                     ]);
+    //                 }
+
+    //                 foreach ($tableData['row_categories'] ?? [] as $catIndex => $rowCat) {
+    //                     $categoryRow = new LabTestTemplateTableRowCategory([
+    //                         'table_id' => $table->id,
+    //                         'name' => $rowCat['name'],
+    //                         'index' => $catIndex,
+    //                     ]);
+    //                     $categoryRow->save();
+
+    //                     foreach ($rowCat['rows'] ?? [] as $rowIndex => $row) {
+    //                         LabTestTemplateTableRowCategoryRow::create([
+    //                             'category_id' => $categoryRow->id,
+    //                             'values' => $row['values'],
+    //                             'index' => $rowIndex,
+    //                         ]);
+    //                     }
+    //                 }
+    //             }
+    //         }
+
+    //         DB::commit();
+
+    //         return response()->json([
+    //             'message' => 'Template updated successfully',
+    //             'status' => 'success',
+    //             'success' => true,
+    //         ]);
+    //     } catch (ModelNotFoundException $e) {
+    //         DB::rollBack();
+    //         return response()->json([
+    //             'message' => 'Template not found',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 400);
+    //     } catch (Exception $e) {
+    //         DB::rollBack();
+    //         Log::error($e->getMessage());
+    //         return response()->json([
+    //             'message' => 'Something went wrong. Try again in 5 minutes',
+    //             'status' => 'error',
+    //             'success' => false,
+    //         ], 500);
+    //     }
+    // }
+
     public function update(string $id, Request $request)
     {
+        $request->validate([
+            'name' => ['required', 'string', Rule::unique('lab_test_result_templates', 'name')->ignore($id)],
+
+            'input_fields' => ['nullable', 'array'],
+            'input_fields.*.fieldName' => ['present', 'string', 'nullable'],
+            'input_fields.*.value' => ['present', 'string', 'nullable'],
+
+            'tables' => ['nullable', 'array'],
+            'tables.*.columns' => ['present', 'array'],
+            'tables.*.columns.*.header' => ['present', 'string', 'nullable'],
+            'tables.*.columns.*.subColumns' => ['nullable', 'array'],
+            'tables.*.columns.*.subColumns.*' => ['present', 'string', 'nullable'],
+
+            'tables.*.rows' => ['present', 'array'],
+            'tables.*.rows.*.values' => ['present', 'array'],
+            'tables.*.rows.*.values.*' => ['present', 'string', 'nullable'],
+
+            'tables.*.row_categories' => ['nullable', 'array'],
+            'tables.*.row_categories.*.name' => ['present', 'string', 'nullable'],
+            'tables.*.row_categories.*.rows' => ['present', 'array'],
+            'tables.*.row_categories.*.rows.*.values' => ['present', 'array'],
+            'tables.*.row_categories.*.rows.*.values.*' => ['present', 'string', 'nullable'],
+
+            'categories' => ['nullable', 'array'],
+            'categories.*.name' => ['present', 'string', 'nullable'],
+            'categories.*.input_fields' => ['nullable', 'array'],
+            'categories.*.input_fields.*.fieldName' => ['present', 'string', 'nullable'],
+            'categories.*.input_fields.*.value' => ['present', 'string', 'nullable'],
+
+            'categories.*.tables' => ['present', 'array'],
+            'categories.*.tables.*.columns' => ['present', 'array'],
+            'categories.*.tables.*.columns.*.header' => ['present', 'string', 'nullable'],
+            'categories.*.tables.*.columns.*.subColumns' => ['nullable', 'array'],
+            'categories.*.tables.*.columns.*.subColumns.*' => ['present', 'string', 'nullable'],
+
+            'categories.*.tables.*.rows' => ['present', 'array'],
+            'categories.*.tables.*.rows.*.values' => ['present', 'array'],
+            'categories.*.tables.*.rows.*.values.*' => ['present', 'string', 'nullable'],
+
+            'categories.*.tables.*.row_categories' => ['nullable', 'array'],
+            'categories.*.tables.*.row_categories.*.name' => ['present', 'string', 'nullable'],
+            'categories.*.tables.*.row_categories.*.rows' => ['present', 'array'],
+            'categories.*.tables.*.row_categories.*.rows.*.values' => ['present', 'array'],
+            'categories.*.tables.*.row_categories.*.rows.*.values.*' => ['present', 'string', 'nullable'],
+        ]);
+
         DB::beginTransaction();
         try {
-            $existing = LabTestResultTemplate::where('name', $request->name)
-                ->where('id', '!=', $id)
-                ->exists();
-
-            if ($existing) {
-                return response()->json([
-                    'message' => 'Template name already exist',
-                    'status' => 'error',
-                    'success' => true,
-                ], 400);
-            }
-
             $template = LabTestResultTemplate::with(['tables', 'categories.tables'])->findOrFail($id);
 
-            // $template->update([
-            //     'name' => $request->name,
-            //     'input_fields' => $request->input_fields,
-            //     'last_updated_by_id' => Auth::id(),
-            // ]);
             $template->name = $request->name;
-            $template->input_fields = $request->input_fields;
+            $template->input_fields = $request->input_fields ?? [];
             $template->last_updated_by_id = Auth::id();
             $template->save();
 
-            // Delete previous related records
-            LabTestTemplateTable::where('template_id', $template->id)->delete();
-            LabTestTemplateCategory::where('template_id', $template->id)->delete();
+            // Gather everything that currently belongs to this template - both
+            // top-level tables and tables nested under its categories - so we can
+            // fully clean up children (rows, columns, row_categories, and their
+            // rows) instead of leaving them orphaned when the parent table or
+            // category is deleted below.
+            $oldCategoryIds = LabTestTemplateCategory::where('template_id', $template->id)->pluck('id');
+            $oldTopLevelTableIds = LabTestTemplateTable::where('template_id', $template->id)->pluck('id');
+            $oldCategoryTableIds = LabTestTemplateTable::whereIn('category_id', $oldCategoryIds)->pluck('id');
+            $oldTableIds = $oldTopLevelTableIds->merge($oldCategoryTableIds);
+            $oldRowCategoryIds = LabTestTemplateTableRowCategory::whereIn('table_id', $oldTableIds)->pluck('id');
+
+            LabTestTemplateTableRowCategoryRow::whereIn('category_id', $oldRowCategoryIds)->delete();
+            LabTestTemplateTableRowCategory::whereIn('id', $oldRowCategoryIds)->delete();
+            LabTestTemplateTableRow::whereIn('table_id', $oldTableIds)->delete();
+            LabTestTemplateTableColumn::whereIn('table_id', $oldTableIds)->delete();
+            LabTestTemplateTable::whereIn('id', $oldTableIds)->delete();
+            LabTestTemplateCategory::whereIn('id', $oldCategoryIds)->delete();
 
             // Handle plain tables
-            foreach ($request['tables'] ?? [] as $tableData) {
+            foreach ($request['tables'] ?? [] as $tableIndex => $tableData) {
                 $table = new LabTestTemplateTable();
                 $table->template_id = $template->id;
-                $table->index = $tableData['index'] ?? null;
+                $table->index = $tableIndex;
                 $table->save();
 
                 foreach ($tableData['rows'] ?? [] as $index => $row) {
                     LabTestTemplateTableRow::create([
                         'table_id' => $table->id,
-                        'values' => $row['values'] ?? "",
+                        'values' => $row['values'] ?? [],
                         'index' => $index,
                     ]);
                 }
@@ -337,7 +702,7 @@ class LabTestResultTemplateController extends Controller
                     LabTestTemplateTableColumn::create([
                         'table_id' => $table->id,
                         'header' => $column['header'] ?? '',
-                        'sub_columns' => $column['sub_columns'],
+                        'sub_columns' => $column['subColumns'] ?? [],
                         'index' => $index,
                     ]);
                 }
@@ -353,7 +718,7 @@ class LabTestResultTemplateController extends Controller
                     foreach ($rowCat['rows'] ?? [] as $rowIndex => $row) {
                         LabTestTemplateTableRowCategoryRow::create([
                             'category_id' => $category->id,
-                            'values' => $row['values'],
+                            'values' => $row['values'] ?? [],
                             'index' => $rowIndex,
                         ]);
                     }
@@ -370,16 +735,16 @@ class LabTestResultTemplateController extends Controller
                 ]);
                 $category->save();
 
-                foreach ($catData['tables'] ?? [] as $tableData) {
+                foreach ($catData['tables'] ?? [] as $tableIndex => $tableData) {
                     $table = new LabTestTemplateTable();
                     $table->category_id = $category->id;
-                    $table->index = $tableData['index'] ?? null;
+                    $table->index = $tableIndex;
                     $table->save();
 
                     foreach ($tableData['rows'] ?? [] as $index => $row) {
                         LabTestTemplateTableRow::create([
                             'table_id' => $table->id,
-                            'values' => $row['values'] ?? "",
+                            'values' => $row['values'] ?? [],
                             'index' => $index,
                         ]);
                     }
@@ -387,24 +752,24 @@ class LabTestResultTemplateController extends Controller
                     foreach ($tableData['columns'] ?? [] as $index => $column) {
                         LabTestTemplateTableColumn::create([
                             'table_id' => $table->id,
-                            'header' => $column['header'] ?? "",
-                            'sub_columns' => $column['subColumns'] ?? '',
+                            'header' => $column['header'] ?? '',
+                            'sub_columns' => $column['subColumns'] ?? [],
                             'index' => $index,
                         ]);
                     }
 
-                    foreach ($tableData['row_categories'] ?? [] as $catIndex => $rowCat) {
+                    foreach ($tableData['row_categories'] ?? [] as $rcIndex => $rowCat) {
                         $categoryRow = new LabTestTemplateTableRowCategory([
                             'table_id' => $table->id,
                             'name' => $rowCat['name'],
-                            'index' => $catIndex,
+                            'index' => $rcIndex,
                         ]);
                         $categoryRow->save();
 
                         foreach ($rowCat['rows'] ?? [] as $rowIndex => $row) {
                             LabTestTemplateTableRowCategoryRow::create([
                                 'category_id' => $categoryRow->id,
-                                'values' => $row['values'],
+                                'values' => $row['values'] ?? [],
                                 'index' => $rowIndex,
                             ]);
                         }
